@@ -3,18 +3,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MultiSelectCombobox } from '@/components/ui/multi-select-combobox';
 import { DatePicker } from '@/components/ui/date-picker';
 import { ModeToggle } from '@/components/mode-toggle';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 function App() {
   const [reportData, setReportData] = useState(null);
   const [tags, setTags] = useState([]);
   const [sectors, setSectors] = useState([]);
   const [error, setError] = useState(null);
-  const [filterType, setFilterType] = useState('date');
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingDots, setLoadingDots] = useState('');
 
   // Estados para os filtros
   const [startDate, setStartDate] = useState<Date | undefined>();
@@ -42,25 +42,47 @@ function App() {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    if (isLoading) {
+      const interval = setInterval(() => {
+        setLoadingDots((dots) => (dots.length < 3 ? dots + '.' : ''));
+      }, 500);
+      return () => clearInterval(interval);
+    }
+  }, [isLoading]);
+
   const handleGenerateReport = async (event) => {
     event.preventDefault();
+    setIsLoading(true);
+    setError(null);
+    setReportData(null);
 
     const baseUrl = 'http://localhost:3001/api/cards';
     const params = new URLSearchParams();
 
-    params.append('board', 'IA Manutenção');
+    params.append('board', '682251a6c5a42b757a5dbe79');
 
-    if (filterType === 'date' && startDate && endDate) {
+    if (startDate && endDate) {
       const createdAt = {
         start_date: startDate.toISOString(),
         end_date: endDate.toISOString(),
       };
       params.append('created_at', JSON.stringify(createdAt));
-    } else if (filterType === 'campaign' && campaign) {
+    } else if (startDate || endDate) {
+        setError('Para filtrar por data, é necessário selecionar a Data de Início e a Data de Fim.');
+        setIsLoading(false);
+        return;
+    }
+
+    if (campaign) {
       params.append('campaign', campaign);
-    } else if (filterType === 'source' && source) {
+    }
+
+    if (source) {
       params.append('source', source);
-    } else if (filterType === 'tags' && selectedTags.length > 0) {
+    }
+
+    if (selectedTags.length > 0) {
       params.append('tags', selectedTags.join(','));
     }
 
@@ -74,11 +96,12 @@ function App() {
 
       const report = await response.json();
       setReportData(report);
-      setError(null);
     } catch (error) {
       setReportData(null);
       setError(error.message);
       console.error('Error generating report:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -95,78 +118,39 @@ function App() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleGenerateReport} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
               <div>
-                <Label htmlFor="board">Quadro</Label>
-                <Select name="board" defaultValue="IA Manutenção">
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione o quadro" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="IA Manutenção">IA Manutenção</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>Período</Label>
+                <div className="flex space-x-2">
+                  <DatePicker placeholder="Data de Início" date={startDate} setDate={setStartDate} />
+                  <DatePicker placeholder="Data de Fim" date={endDate} setDate={setEndDate} />
+                </div>
               </div>
 
               <div>
-                <Label htmlFor="filterType">Filtrar por</Label>
-                <Select name="filterType" onValueChange={(value) => { setFilterType(value); setReportData(null); }} defaultValue="date">
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione o tipo de filtro" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="date">Data</SelectItem>
-                    <SelectItem value="campaign">Campanha</SelectItem>
-                    <SelectItem value="source">Fonte</SelectItem>
-                    <SelectItem value="tags">Etiquetas</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label htmlFor="campaign">Campanha</Label>
+                <Input name="campaign" id="campaign" placeholder="Nome da campanha" value={campaign} onChange={(e) => setCampaign(e.target.value)} />
               </div>
 
-              {filterType === 'date' && (
-                <div>
-                  <Label>Período</Label>
-                  <div className="flex space-x-2">
-                    <DatePicker placeholder="Data de Início" date={startDate} setDate={setStartDate} />
-                    <DatePicker placeholder="Data de Fim" date={endDate} setDate={setEndDate} />
-                  </div>
-                </div>
-              )}
+              <div>
+                <Label htmlFor="source">Fonte</Label>
+                <Input name="source" id="source" placeholder="Nome da fonte" value={source} onChange={(e) => setSource(e.target.value)} />
+              </div>
 
-              {filterType === 'campaign' && (
-                <div>
-                  <Label htmlFor="campaign">Campanha</Label>
-                  <Input name="campaign" id="campaign" placeholder="Digite o nome da campanha" value={campaign} onChange={(e) => setCampaign(e.target.value)} />
-                </div>
-              )}
-
-              {filterType === 'source' && (
-                <div>
-                  <Label htmlFor="source">Fonte</Label>
-                  <Input name="source" id="source" placeholder="Digite o nome da fonte" value={source} onChange={(e) => setSource(e.target.value)} />
-                </div>
-              )}
-
-              {filterType === 'tags' && (
-                <div>
-                  <Label htmlFor="tags">Etiquetas</Label>
-                  <Select name="tags" onValueChange={(value) => setSelectedTags([value])}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecione as etiquetas" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Array.isArray(tags) && tags.map((tag) => (
-                        <SelectItem key={tag.id} value={tag.id}>
-                          {tag.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              <div>
+                <Label htmlFor="tags">Etiquetas</Label>
+                <MultiSelectCombobox
+                  options={tags}
+                  selected={selectedTags}
+                  onChange={setSelectedTags}
+                  className="w-full"
+                />
+              </div>
             </div>
 
-            <Button type="submit">Gerar Relatório</Button>
+            <Button type="submit" disabled={isLoading}>
+              {isLoading ? 'Gerando...' : 'Gerar Relatório'}
+            </Button>
           </form>
         </CardContent>
       </Card>
@@ -178,32 +162,42 @@ function App() {
         </Alert>
       )}
 
-      {reportData && (
+      {isLoading && (
+        <div className="flex justify-center items-center mt-8">
+          <p className="text-lg">
+            <span>Carregando dados</span>
+            <span className="inline-block w-[2ch] text-left">{loadingDots}</span>
+          </p>
+        </div>
+      )}
+
+      {!isLoading && reportData && (
         <Card className="mt-8">
           <CardHeader>
-            <CardTitle>Resultados do Relatório</CardTitle>
+            <CardTitle>Resumo do Relatório</CardTitle>
           </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nome</TableHead>
-                  <TableHead>Campanha</TableHead>
-                  <TableHead>Fonte</TableHead>
-                  <TableHead>Data de Criação</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {reportData.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell>{item.name}</TableCell>
-                    <TableCell>{item.campaign}</TableCell>
-                    <TableCell>{item.source}</TableCell>
-                    <TableCell>{new Date(item.created_at).toLocaleDateString()}</TableCell>
-                  </TableRow>
+          <CardContent className="space-y-4">
+            <div>
+              <p className="font-bold text-lg">Total de Cards:</p>
+              <p>{reportData.length}</p>
+            </div>
+            <div>
+              <p className="font-bold text-lg">Campanhas Encontradas:</p>
+              <ul className="list-disc list-inside">
+                {[...new Set(reportData.map(item => item.campaign))].map(campaign => (
+                  <li key={campaign}>{campaign}</li>
                 ))}
-              </TableBody>
-            </Table>
+              </ul>
+            </div>
+            <div>
+              <p className="font-bold text-lg">Período dos Cards:</p>
+              <p>
+                <strong>Mais antigo:</strong> {new Date(Math.min(...reportData.map(item => new Date(item.created_at).getTime()))).toLocaleDateString()}
+              </p>
+              <p>
+                <strong>Mais recente:</strong> {new Date(Math.max(...reportData.map(item => new Date(item.created_at).getTime()))).toLocaleDateString()}
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}

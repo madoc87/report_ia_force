@@ -58,9 +58,11 @@ const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
 
 app.get('/api/cards', async (req, res) => {
   try {
-    const { board, tags, created_at, campaign, source } = req.query;
+    // O quadro 'IA Manutenção' é o padrão, mas permite que seja sobrescrito pela query
+    const boardId = req.query.board || process.env.BOARD_ID_HABLLA;
+    const { tags, created_at, campaign, source } = req.query;
     const queryParams = {
-      board,
+      board: boardId,
       tags,
       created_at,
       campaign,
