@@ -64,7 +64,27 @@ Este documento detalha as etapas de configuração e desenvolvimento realizadas 
     *   **Correção do Seletor de Tema:** Ajustado o `theme-provider.tsx` para garantir que a classe `dark` seja aplicada corretamente ao elemento `html`.
     *   **Construção da URL de Requisição:** A função `handleGenerateReport` foi atualizada para construir a URL da API de cards com os parâmetros de filtro corretos, incluindo o formato JSON para `created_at`.
 
-## 3. Próximos Passos e Instruções
+## 3. Refatoração da Interface e Melhorias de UX (04/08/2025)
+
+*   **Correção de Bugs no Backend:**
+    *   Resolvido erro `400 Bad Request` na rota `/api/cards` ao forçar o uso do `BOARD_ID_HABLLA` a partir do arquivo `.env`, garantindo que a requisição para a API da Hablla seja sempre válida.
+*   **Melhorias na Interface de Filtros:**
+    *   A lógica de filtros foi completamente refatorada, removendo o seletor "Filtrar por" e permitindo que o usuário combine múltiplos filtros (data, campanha, fonte, etiquetas) simultaneamente.
+*   **Melhorias de Experiência do Usuário (UX):**
+    *   **Indicador de Carregamento:** Adicionado um estado de `isLoading` que desativa o botão "Gerar Relatório" e exibe uma mensagem "Carregando dados..." com uma animação de pontos para dar feedback visual durante a busca na API.
+    *   **Exibição de Resultados:** A tabela de resultados foi substituída por um card de resumo, que mostra o total de cards, uma lista de campanhas únicas e o período (data mais antiga e mais recente) dos dados retornados.
+    *   **Validação de Filtros:** Adicionada validação para o filtro de data, que agora exibe um erro se o usuário não preencher tanto a data de início quanto a de fim.
+*   **Implementação do Filtro de Tags Avançado:**
+    *   O seletor de tags simples foi substituído por um componente `MultiSelectCombobox` mais robusto.
+    *   Foram adicionados os componentes `Command`, `Badge` e `Dialog` do `shadcn/ui` como dependências.
+    *   A biblioteca `cmdk` foi instalada para gerenciar a funcionalidade de busca.
+    *   O novo componente inclui busca por nome, exibição das cores das tags e uma interface para seleção múltipla.
+
+## 4. Próximos Passos e Instruções
+
+### Pendências Atuais
+
+*   **Corrigir Filtro de Tags:** O componente `MultiSelectCombobox` foi implementado, mas a funcionalidade de **selecionar/deselecionar** as etiquetas não está funcionando como esperado. A busca e a exibição estão corretas, mas o clique não altera o estado da seleção. Esta é a principal pendência a ser resolvida.
 
 ### Para o Próximo Agente/Sessão:
 
