@@ -3,35 +3,66 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { MultiSelectCombobox } from '@/components/ui/multi-select-combobox';
+import { MultiSelectCombobox, Tag } from '@/components/ui/multi-select-combobox';
 import { DatePicker } from '@/components/ui/date-picker';
 import { ModeToggle } from '@/components/mode-toggle';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Checkbox } from '@/components/ui/checkbox';
+
+// Definição de Tipos para os dados da API
+interface ReportCard {
+  id: string;
+  name: string;
+  campaign: string;
+  source: string;
+  created_at: string;
+}
+
+interface Sector {
+  id: string;
+  name: string;
+}
+
+const boards = [
+  { id: "682251a6c5a42b757a5dbe79", name: "IA Manutenção" },
+  { id: "681fd53d454440210d383433", name: "Assistência Técnica" },
+  { id: "682cbfd0b7a2255a8de33d90", name: "DEMANDAS MARKETING" },
+  { id: "67e69469e61a2499d84a4e65", name: "Inside Sales" },
+  { id: "6862f617232cdd6b69cfe545", name: "Lojas" },
+  { id: "6825d919b5c101953b6b67be", name: "Projetos e Tarefas | Por Departamento" },
+  { id: "67ed27b22f1b8a5a02c348c2", name: "Televendas PF" },
+  { id: "685c24cca0784d79c539af00", name: "Televendas PJ" },
+];
 
 function App() {
-  const [reportData, setReportData] = useState(null);
-  const [tags, setTags] = useState([]);
-  const [sectors, setSectors] = useState([]);
-  const [error, setError] = useState(null);
+  const [reportData, setReportData] = useState<ReportCard[] | null>(null);
+  const [cardList, setCardList] = useState<ReportCard[] | null>(null);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [sectors, setSectors] = useState<Sector[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingDots, setLoadingDots] = useState('');
 
   // Estados para os filtros
+  const [selectedBoard, setSelectedBoard] = useState<string>(boards[0].id); // Padrão: IA Manutenção
   const [startDate, setStartDate] = useState<Date | undefined>();
   const [endDate, setEndDate] = useState<Date | undefined>();
   const [campaign, setCampaign] = useState('');
   const [source, setSource] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [searchEmptyCampaign, setSearchEmptyCampaign] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         const tagsResponse = await fetch('http://localhost:3001/api/tags');
-        const tagsData = await tagsResponse.json();
+        const tagsData: Tag[] = await tagsResponse.json();
         setTags(tagsData);
 
         const sectorsResponse = await fetch('http://localhost:3001/api/sectors');
-        const sectorsData = await sectorsResponse.json();
+        const sectorsData: Sector[] = await sectorsResponse.json();
         setSectors(sectorsData);
       } catch (error) {
         setError('Falha ao buscar dados do servidor. Verifique se o backend está rodando.');
@@ -51,16 +82,14 @@ function App() {
     }
   }, [isLoading]);
 
-  const handleGenerateReport = async (event) => {
-    event.preventDefault();
-    setIsLoading(true);
-    setError(null);
-    setReportData(null);
+  const performSearch = async () => {
+    if ((startDate && !endDate) || (!startDate && endDate)) {
+      throw new Error('Para filtrar por data, é necessário selecionar a Data de Início e a Data de Fim.');
+    }
 
     const baseUrl = 'http://localhost:3001/api/cards';
     const params = new URLSearchParams();
-
-    params.append('board', '682251a6c5a42b757a5dbe79');
+    params.append('board', selectedBoard);
 
     if (startDate && endDate) {
       const createdAt = {
@@ -68,38 +97,55 @@ function App() {
         end_date: endDate.toISOString(),
       };
       params.append('created_at', JSON.stringify(createdAt));
-    } else if (startDate || endDate) {
-        setError('Para filtrar por data, é necessário selecionar a Data de Início e a Data de Fim.');
-        setIsLoading(false);
-        return;
     }
-
-    if (campaign) {
+    if (!searchEmptyCampaign && campaign) {
       params.append('campaign', campaign);
     }
+    if (source) params.append('source', source);
+    if (selectedTags.length > 0) params.append('tags', selectedTags.join(','));
 
-    if (source) {
-      params.append('source', source);
+    const response = await fetch(`${baseUrl}?${params.toString()}`);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || 'Falha na busca por cartões.');
     }
+    return response.json();
+  };
 
-    if (selectedTags.length > 0) {
-      params.append('tags', selectedTags.join(','));
-    }
+  const handleGenerateReport = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsLoading(true);
+    setError(null);
+    setReportData(null);
+    setCardList(null);
 
     try {
-      const response = await fetch(`${baseUrl}?${params.toString()}`);
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Falha ao gerar o relatório.');
+      let results: ReportCard[] = await performSearch();
+      if (searchEmptyCampaign) {
+        results = results.filter(card => !card.campaign);
       }
-
-      const report = await response.json();
-      setReportData(report);
-    } catch (error) {
-      setReportData(null);
+      setReportData(results);
+    } catch (error: any) {
       setError(error.message);
-      console.error('Error generating report:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFindCardsClick = async () => {
+    setIsLoading(true);
+    setError(null);
+    setReportData(null);
+    setCardList(null);
+
+    try {
+      let results: ReportCard[] = await performSearch();
+      if (searchEmptyCampaign) {
+        results = results.filter(card => !card.campaign);
+      }
+      setCardList(results);
+    } catch (error: any) {
+      setError(error.message);
     } finally {
       setIsLoading(false);
     }
@@ -120,6 +166,22 @@ function App() {
           <form onSubmit={handleGenerateReport} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
               <div>
+                <Label htmlFor="board">Quadro</Label>
+                <Select value={selectedBoard} onValueChange={setSelectedBoard}>
+                  <SelectTrigger id="board">
+                    <SelectValue placeholder="Selecione o quadro" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {boards.map((board) => (
+                      <SelectItem key={board.id} value={board.id}>
+                        {board.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
                 <Label>Período</Label>
                 <div className="flex space-x-2">
                   <DatePicker placeholder="Data de Início" date={startDate} setDate={setStartDate} />
@@ -129,7 +191,24 @@ function App() {
 
               <div>
                 <Label htmlFor="campaign">Campanha</Label>
-                <Input name="campaign" id="campaign" placeholder="Nome da campanha" value={campaign} onChange={(e) => setCampaign(e.target.value)} />
+                <div className="flex items-center space-x-2 mt-2">
+                  <Input 
+                    name="campaign" 
+                    id="campaign" 
+                    placeholder="Nome da campanha" 
+                    value={campaign} 
+                    onChange={(e) => setCampaign(e.target.value)}
+                    disabled={searchEmptyCampaign}
+                  />
+                  <div className="flex items-center space-x-1">
+                    <Checkbox 
+                      id="empty-campaign"
+                      checked={searchEmptyCampaign}
+                      onCheckedChange={(checked) => setSearchEmptyCampaign(Boolean(checked))}
+                    />
+                    <Label htmlFor="empty-campaign" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">Vazias</Label>
+                  </div>
+                </div>
               </div>
 
               <div>
@@ -147,10 +226,14 @@ function App() {
                 />
               </div>
             </div>
-
-            <Button type="submit" disabled={isLoading}>
-              {isLoading ? 'Gerando...' : 'Gerar Relatório'}
-            </Button>
+            <div className="flex space-x-2">
+              <Button type="submit" disabled={isLoading}>
+                {isLoading ? 'Gerando...' : 'Gerar Relatório'}
+              </Button>
+              <Button type="button" variant="secondary" onClick={handleFindCardsClick} disabled={isLoading}>
+                {isLoading ? 'Buscando...' : 'Buscar IDs'}
+              </Button>
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -177,27 +260,67 @@ function App() {
             <CardTitle>Resumo do Relatório</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div>
-              <p className="font-bold text-lg">Total de Cards:</p>
-              <p>{reportData.length}</p>
-            </div>
-            <div>
-              <p className="font-bold text-lg">Campanhas Encontradas:</p>
-              <ul className="list-disc list-inside">
-                {[...new Set(reportData.map(item => item.campaign))].map(campaign => (
-                  <li key={campaign}>{campaign}</li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <p className="font-bold text-lg">Período dos Cards:</p>
-              <p>
-                <strong>Mais antigo:</strong> {new Date(Math.min(...reportData.map(item => new Date(item.created_at).getTime()))).toLocaleDateString()}
-              </p>
-              <p>
-                <strong>Mais recente:</strong> {new Date(Math.max(...reportData.map(item => new Date(item.created_at).getTime()))).toLocaleDateString()}
-              </p>
-            </div>
+            {reportData.length > 0 ? (
+              <>
+                <div>
+                  <p className="font-bold text-lg">Total de Cards:</p>
+                  <p>{reportData.length}</p>
+                </div>
+                <div>
+                  <p className="font-bold text-lg">Campanhas Encontradas:</p>
+                  <ul className="list-disc list-inside">
+                    {[...new Set(reportData.map(item => item.campaign).filter(Boolean))].map(campaign => (
+                      <li key={campaign}>{campaign}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="font-bold text-lg">Período dos Cards:</p>
+                  <p>
+                    <strong>Mais antigo:</strong> {new Date(Math.min(...reportData.map(item => new Date(item.created_at).getTime()))).toLocaleDateString()}
+                  </p>
+                  <p>
+                    <strong>Mais recente:</strong> {new Date(Math.max(...reportData.map(item => new Date(item.created_at).getTime()))).toLocaleDateString()}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <p>Nenhum card encontrado para este filtro.</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {!isLoading && cardList && (
+        <Card className="mt-8">
+          <CardHeader>
+            <CardTitle>Lista de Cards Encontrados</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {cardList.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>ID do Cartão</TableHead>
+                    <TableHead>Nome</TableHead>
+                    <TableHead>Campanha</TableHead>
+                    <TableHead>Data de Criação</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {cardList.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>{item.id}</TableCell>
+                      <TableCell>{item.name}</TableCell>
+                      <TableCell>{item.campaign || "-"}</TableCell>
+                      <TableCell>{new Date(item.created_at).toLocaleDateString()}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p>Nenhum card encontrado para este filtro.</p>
+            )}
           </CardContent>
         </Card>
       )}

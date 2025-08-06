@@ -80,7 +80,22 @@ Este documento detalha as etapas de configuração e desenvolvimento realizadas 
     *   A biblioteca `cmdk` foi instalada para gerenciar a funcionalidade de busca.
     *   O novo componente inclui busca por nome, exibição das cores das tags e uma interface para seleção múltipla.
 
-## 4. Próximos Passos e Instruções
+## 4. Expansão de Funcionalidades e Correções de Bugs (04/08/2025)
+
+*   **Seleção de Quadros:** Adicionado um seletor no formulário para permitir que o usuário escolha em qual quadro a busca será realizada. "IA Manutenção" permanece como o valor padrão.
+*   **Busca por Campanhas Vazias:** Implementada a funcionalidade de buscar cards com o campo de campanha vazio através de um checkbox. A lógica foi ajustada para realizar a filtragem no frontend, garantindo a precisão do resultado.
+*   **Visualização de IDs de Cartão:** Adicionado um botão "Buscar IDs" que exibe os resultados da busca em uma tabela detalhada, incluindo o ID de cada cartão, para fácil localização no sistema da Hablla.
+*   **Melhorias de Usabilidade e UX:**
+    *   **Resultados Vazios:** A interface agora exibe uma mensagem clara ("Nenhum card encontrado...") quando uma busca não retorna resultados, em vez de mostrar um resumo com dados inválidos.
+    *   **Limpar Filtro de Data:** Adicionado um botão "X" ao componente `DatePicker` para permitir que o usuário remova facilmente o filtro de data sem precisar recarregar a página.
+*   **Correções de Bugs Críticos:**
+    *   Resolvido o erro `Table is not defined` que impedia a renderização da lista de IDs.
+    *   Corrigido o bug que causava o envio automático do formulário ao selecionar uma data.
+    *   Ajustado o layout do `DatePicker` para que ele seja responsivo e não quebre em diferentes tamanhos de tela.
+*   **Qualidade de Código:**
+    *   Adicionada tipagem TypeScript completa ao componente `App.tsx` para os estados e dados da API, eliminando erros de tipo e aumentando a robustez do código.
+
+## 5. Próximos Passos e Instruções
 
 ### Pendências Atuais
 
