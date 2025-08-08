@@ -53,6 +53,7 @@ function App() {
   const [source, setSource] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [searchEmptyCampaign, setSearchEmptyCampaign] = useState(false);
+  const [defaultsSet, setDefaultsSet] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -72,6 +73,18 @@ function App() {
 
     fetchData();
   }, []);
+
+  // Efeito para pré-selecionar as tags padrão
+  useEffect(() => {
+    if (tags.length > 0 && !defaultsSet) {
+      const defaultTagNames = ["IA - Venda IA", "IA - Venda Manual", "IA - Venda Operador"];
+      const defaultTags = tags.filter(tag => defaultTagNames.includes(tag.name));
+      if (defaultTags.length > 0) {
+        setSelectedTags(defaultTags.map(tag => tag.id));
+        setDefaultsSet(true);
+      }
+    }
+  }, [tags, defaultsSet]);
 
   useEffect(() => {
     if (isLoading) {
