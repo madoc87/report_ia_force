@@ -8,6 +8,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { ModeToggle } from '@/components/mode-toggle';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ClipboardCopy, Check } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Checkbox } from '@/components/ui/checkbox';
 
@@ -18,6 +19,9 @@ interface ReportCard {
   campaign: string;
   source: string;
   created_at: string;
+  tags: { id: string; name: string }[];
+  list: string;
+  moves: any[];
 }
 
 interface Sector {
@@ -36,9 +40,23 @@ const boards = [
   { id: "685c24cca0784d79c539af00", name: "Televendas PJ" },
 ];
 
+interface CampaignSummary {
+  campaignNames: string;
+  dateRange: string;
+  totalClients: number;
+  totalPhones: string;
+  totalRead: string;
+  totalDelivered: string;
+  totalHabllaResponses: string;
+  salesIA: number;
+  salesManual: number;
+}
+
 function App() {
   const [reportData, setReportData] = useState<ReportCard[] | null>(null);
   const [cardList, setCardList] = useState<ReportCard[] | null>(null);
+  const [campaignSummary, setCampaignSummary] = useState<CampaignSummary | null>(null);
+  const [isCopied, setIsCopied] = useState(false);
   const [tags, setTags] = useState<Tag[]>([]);
   const [sectors, setSectors] = useState<Sector[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +149,7 @@ function App() {
     setError(null);
     setReportData(null);
     setCardList(null);
+    setCampaignSummary(null);
 
     try {
       let results: ReportCard[] = await performSearch();
@@ -150,6 +169,7 @@ function App() {
     setError(null);
     setReportData(null);
     setCardList(null);
+    setCampaignSummary(null);
 
     try {
       let results: ReportCard[] = await performSearch();
@@ -157,6 +177,85 @@ function App() {
         results = results.filter(card => !card.campaign);
       }
       setCardList(results);
+    } catch (error: any) {
+      setError(error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCopySummary = () => {
+    if (!campaignSummary) return;
+
+    const summaryText = `
+Campanha: ${campaignSummary.campaignNames}
+Dt. Envio: ${campaignSummary.dateRange}
+Total de clientes: ${campaignSummary.totalClients}
+Total de telefones: ${campaignSummary.totalPhones}
+Total Lida: ${campaignSummary.totalRead}
+Total Entregue: ${campaignSummary.totalDelivered}
+Total de Respostas pelo Hablla: ${campaignSummary.totalHabllaResponses}
+  * WhatsApp: (Dado não disponível)
+  * Ligação: (Dado não disponível)
+  * Não quero contato: (Dado não disponível)
+Venda IA: ${campaignSummary.salesIA}
+Venda Manual: ${campaignSummary.salesManual}
+    `.trim();
+
+    navigator.clipboard.writeText(summaryText).then(() => {
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000); // O ícone de "copiado" volta ao normal após 2 segundos
+    });
+  };
+
+  const handleGenerateCampaignSummary = async () => {
+    setIsLoading(true);
+    setError(null);
+    setReportData(null);
+    setCardList(null);
+    setCampaignSummary(null);
+
+    try {
+      let results: ReportCard[] = await performSearch();
+      if (searchEmptyCampaign) {
+        results = results.filter(card => !card.campaign);
+      }
+
+      const campaignNames = [...new Set(results.map(c => c.campaign).filter(Boolean))].join(', ') || 'N/A';
+      const dates = results.map(c => new Date(c.created_at).getTime());
+      const minDate = new Date(Math.min(...dates));
+      const maxDate = new Date(Math.max(...dates));
+      let dateRange = 'N/A';
+      if (results.length > 0) {
+        const minDateStr = minDate.toLocaleDateString();
+        const maxDateStr = maxDate.toLocaleDateString();
+        dateRange = minDateStr === maxDateStr ? minDateStr : `${minDateStr} - ${maxDateStr}`;
+      }
+
+      // Lógica de cálculo atualizada conforme a nova definição
+      const totalClients = new Set(results.map(c => c.name)).size;
+      const totalPhones = results.length;
+      const totalHabllaResponses = results.filter(c => c.moves && c.moves.length > 0).length;
+      
+      const salesIA = results.filter(c => 
+        c.tags?.some(t => t.name === "IA - Venda IA" || t.name === "IA - Venda Manual")
+      ).length;
+      const salesManual = results.filter(c => c.tags?.some(t => t.name === "IA - Venda Operador")).length;
+
+      const summary: CampaignSummary = {
+        campaignNames,
+        dateRange,
+        totalClients,
+        totalPhones: String(totalPhones),
+        totalRead: "(Dado não disponível)",
+        totalDelivered: "(Dado não disponível)",
+        totalHabllaResponses: String(totalHabllaResponses),
+        salesIA,
+        salesManual,
+      };
+
+      setCampaignSummary(summary);
+
     } catch (error: any) {
       setError(error.message);
     } finally {
@@ -246,6 +345,9 @@ function App() {
               <Button type="button" variant="secondary" onClick={handleFindCardsClick} disabled={isLoading}>
                 {isLoading ? 'Buscando...' : 'Buscar IDs'}
               </Button>
+              <Button type="button" variant="outline" onClick={handleGenerateCampaignSummary} disabled={isLoading}>
+                {isLoading ? 'Gerando...' : 'Resumo Campanha'}
+              </Button>
             </div>
           </form>
         </CardContent>
@@ -334,6 +436,31 @@ function App() {
             ) : (
               <p>Nenhum card encontrado para este filtro.</p>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {!isLoading && campaignSummary && (
+        <Card className="mt-8">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Resumo da Campanha</CardTitle>
+            <Button variant="ghost" size="icon" onClick={handleCopySummary}>
+              {isCopied ? <Check className="h-4 w-4 text-green-500" /> : <ClipboardCopy className="h-4 w-4" />}
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p><strong>Campanha:</strong> {campaignSummary.campaignNames}</p>
+            <p><strong>Dt. Envio:</strong> {campaignSummary.dateRange}</p>
+            <p><strong>Total de clientes:</strong> {campaignSummary.totalClients}</p>
+            <p><strong>Total de telefones:</strong> {campaignSummary.totalPhones}</p>
+            <p><strong>Total Lida:</strong> {campaignSummary.totalRead}</p>
+            <p><strong>Total Entregue:</strong> {campaignSummary.totalDelivered}</p>
+            <p><strong>Total de Respostas pelo Hablla:</strong> {campaignSummary.totalHabllaResponses}</p>
+            <p className="pl-4">* WhatsApp: (Dado não disponível)</p>
+            <p className="pl-4">* Ligação: (Dado não disponível)</p>
+            <p className="pl-4">* Não quero contato: (Dado não disponível)</p>
+            <p><strong>Venda IA:</strong> {campaignSummary.salesIA}</p>
+            <p><strong>Venda Manual:</strong> {campaignSummary.salesManual}</p>
           </CardContent>
         </Card>
       )}

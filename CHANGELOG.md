@@ -95,11 +95,45 @@ Este documento detalha as etapas de configuração e desenvolvimento realizadas 
 *   **Qualidade de Código:**
     *   Adicionada tipagem TypeScript completa ao componente `App.tsx` para os estados e dados da API, eliminando erros de tipo e aumentando a robustez do código.
 
-## 5. Próximos Passos e Instruções
+## 5. Refinamento do Relatório de Campanha e Correções Finais (04/08/2025)
+
+*   **Correção do Filtro de Tags:** O problema que impedia a seleção de etiquetas no componente `MultiSelectCombobox` foi finalmente resolvido.
+*   **Pré-seleção de Tags:** Implementada a funcionalidade para que as etiquetas "IA - Venda IA", "IA - Venda Manual" e "IA - Venda Operaodr" já venham selecionadas por padrão ao carregar a página.
+*   **Novo Relatório "Resumo da Campanha":**
+    *   Adicionado um novo botão para gerar um relatório com métricas específicas de campanha.
+    *   A lógica de cálculo para este relatório foi refinada para ser mais precisa:
+        *   `Total de clientes:` Calculado com base no número de nomes de cartões únicos.
+        *   `Total de telefones:` Calculado como o número total de cartões.
+        *   `Total de Respostas pelo Hablla:` Calculado com base no histórico de movimentação do cartão (`moves`).
+        *   `Venda IA` e `Venda Manual`: A contagem foi ajustada para seguir as regras de negócio específicas para cada métrica.
+*   **Melhorias de Usabilidade no Relatório:**
+    *   O campo "Dt. Envio" agora exibe uma única data se as datas de início e fim forem iguais.
+    *   Adicionado um botão "Copiar" que permite ao usuário copiar facilmente todo o texto do resumo para a área de transferência.
+*   **Correção de Bug Crítico:** Resolvido o erro `Select is not defined` causado por uma importação incorreta, que impedia a aplicação de carregar.
+
+## 6. Introduzindo um novo tipo de relatório e refinando a experiência do usuário (10/08/2025)
+ 
+- **Novo Relatório "Resumo da Campanha":**
+    - Adiciona um botão para gerar um relatório com métricas detalhadas.
+    - Implementa cálculos precisos para "Total de clientes" (nomes únicos), "Total de telefones" (total de cards) e "Total de 
+Respostas" (baseado no histórico de `moves`).
+    - Ajusta a contagem de "Venda IA" e "Venda Manual" para seguir as regras de negócio corretas.
+    
+- **Melhorias de Usabilidade:**
+    - O seletor de tags agora funciona corretamente e pré-seleciona as tags padrão na inicialização.
+    - O relatório de resumo agora possui um botão para copiar os resultados para a área de transferência.
+    - A exibição da data do relatório foi simplificada para mostrar uma única data quando o intervalo é de um só dia.
+
+- **Correções de Bugs:**
+    - Resolve um erro crítico de importação (`Select is not defined`) que impedia a aplicação de carregar.
+
+
+## 6. Próximos Passos e Instruções
 
 ### Pendências Atuais
 
-*   **Corrigir Filtro de Tags:** O componente `MultiSelectCombobox` foi implementado, mas a funcionalidade de **selecionar/deselecionar** as etiquetas não está funcionando como esperado. A busca e a exibição estão corretas, mas o clique não altera o estado da seleção. Esta é a principal pendência a ser resolvida.
+*   Nenhuma pendência crítica. A aplicação está em um estado estável com as funcionalidades solicitadas implementadas.
+*   Mas a proxíma melhoria prevista é adição de uma conexão com outro banco de dados para consulta das primeiras respostas dos clientes, para complementar o relatorio e avaliar quantos clicaram em cada um dos botoes (WhatsApp, Ligação, Não quero contato)
 
 ### Para o Próximo Agente/Sessão:
 
@@ -160,3 +194,7 @@ Para criar um novo repositório no GitHub e enviar este projeto (frontend e back
     (Verifique qual branch o GitHub sugere na página do seu novo repositório, geralmente é `main` hoje em dia).
 
 Após esses passos, todo o seu código (backend e frontend) estará no repositório do GitHub.
+
+
+
+
