@@ -8,7 +8,11 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { ModeToggle } from '@/components/mode-toggle';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ClipboardCopy, Check } from 'lucide-react';
+import {
+  ClipboardCopy, Check, ChartBarBig, CalendarDays,
+  CircleUserRound, Phone, MessageCircleMore, Bot, UserRound, MailCheck, CheckCheck, CircleCheckBig, Mails,
+  Webhook
+} from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Checkbox } from '@/components/ui/checkbox';
 
@@ -76,15 +80,15 @@ function App() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const tagsResponse = await fetch('http://localhost:3001/api/tags');
+        const tagsResponse = await fetch('http://localhost:3005/api/tags');
         const tagsData: Tag[] = await tagsResponse.json();
         setTags(tagsData);
 
-        const sectorsResponse = await fetch('http://localhost:3001/api/sectors');
+        const sectorsResponse = await fetch('http://localhost:3005/api/sectors');
         const sectorsData: Sector[] = await sectorsResponse.json();
         setSectors(sectorsData);
       } catch (error) {
-        setError('Falha ao buscar dados do servidor. Verifique se o backend está rodando.');
+        setError('Falha ao buscar dados do servidor. Verifique se o servidor está rodando.');
         console.error('Error fetching data:', error);
       }
     };
@@ -118,7 +122,7 @@ function App() {
       throw new Error('Para filtrar por data, é necessário selecionar a Data de Início e a Data de Fim.');
     }
 
-    const baseUrl = 'http://localhost:3001/api/cards';
+    const baseUrl = 'http://localhost:3005/api/cards';
     const params = new URLSearchParams();
     params.append('board', selectedBoard);
 
@@ -187,19 +191,24 @@ function App() {
   const handleCopySummary = () => {
     if (!campaignSummary) return;
 
-    const summaryText = `
-Campanha: ${campaignSummary.campaignNames}
-Dt. Envio: ${campaignSummary.dateRange}
-Total de clientes: ${campaignSummary.totalClients}
-Total de telefones: ${campaignSummary.totalPhones}
-Total Lida: ${campaignSummary.totalRead}
-Total Entregue: ${campaignSummary.totalDelivered}
-Total de Respostas pelo Hablla: ${campaignSummary.totalHabllaResponses}
-  * WhatsApp: (Dado não disponível)
-  * Ligação: (Dado não disponível)
-  * Não quero contato: (Dado não disponível)
-Venda IA: ${campaignSummary.salesIA}
-Venda Manual: ${campaignSummary.salesManual}
+    const summaryText = `${/* Para comentar dentro da backticks pode se fazer dessa forma */''}
+📊 *Campanha:* ${campaignSummary.campaignNames}
+📆 *Dt. Envio:* ${campaignSummary.dateRange}
+👤 *Total de clientes:* ${campaignSummary.totalClients}
+📞 *Total de telefones:* ${campaignSummary.totalPhones}
+📩 *Total Lida:* ${campaignSummary.totalRead}
+📖 *Total Entregue:* ${campaignSummary.totalDelivered}
+💬 *Total de Respostas:* ${campaignSummary.totalHabllaResponses}\n`
+
+      // * WhatsApp: (Dado não disponível)
+      // * Ligação: (Dado não disponível)
+      // * Não quero contato: (Dado não disponível)
+      + ` 
+🤖 *Venda IA:* ${campaignSummary.salesIA}
+👨‍💻 *Venda Manual:* ${campaignSummary.salesManual}
+📨 *Mensagem enviada:*
+
+${normalizedMessage}
     `.trim();
 
     navigator.clipboard.writeText(summaryText).then(() => {
@@ -236,8 +245,8 @@ Venda Manual: ${campaignSummary.salesManual}
       const totalClients = new Set(results.map(c => c.name)).size;
       const totalPhones = results.length;
       const totalHabllaResponses = results.filter(c => c.moves && c.moves.length > 0).length;
-      
-      const salesIA = results.filter(c => 
+
+      const salesIA = results.filter(c =>
         c.tags?.some(t => t.name === "IA - Venda IA" || t.name === "IA - Venda Manual")
       ).length;
       const salesManual = results.filter(c => c.tags?.some(t => t.name === "IA - Venda Operador")).length;
@@ -262,6 +271,70 @@ Venda Manual: ${campaignSummary.salesManual}
       setIsLoading(false);
     }
   };
+
+
+  // Tratamento do texto da mensagem enviada
+  const template_enviado = "*Lembrete de Troca de Refil*  Chegou o momento de trocar o refil do seu *Purificador Soft/Everest*!  💧 A qualidade da água que você consome é essencial para a sua *saúde e bem-estar*.  ⚠️ *Atenção*: Refil vencido pode comprometer a pureza da água e a eficiência da purificação.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato";
+  const rawMessage = template_enviado;
+
+  // Se o banco removeu \n e deixou 2 espaços, converta de volta:
+  const normalizedMessage = rawMessage.replace(/ {2,}/g, '\n');
+
+
+  //Função para formatar mensagem no formato deo WhatsApp
+  function parseWhatsAppFormatting(text: string): string {
+    if (!text) return '';
+
+    return text
+      .replace(/\*(.*?)\*/g, '<strong>$1</strong>')
+      .replace(/_(.*?)_/g, '<em>$1</em>')
+      .replace(/~(.*?)~/g, '<s>$1</s>')
+      .replace(/`(.*?)`/g, '<code>$1</code>');
+  }
+
+
+
+  // Função Webhook de enviar
+  const handleSendWebhook = async () => {
+    if (!campaignSummary) return;
+
+    const payload = {
+      campanha: campaignSummary.campaignNames,
+      dt_envio: campaignSummary.dateRange,
+      total_clientes: campaignSummary.totalClients,
+      total_tel: campaignSummary.totalPhones,
+      total_lida: campaignSummary.totalRead,
+      total_entregue: campaignSummary.totalDelivered,
+      total_respostas: campaignSummary.totalHabllaResponses,
+      venda_ia: campaignSummary.salesIA,
+      venda_manual: campaignSummary.salesManual,
+      mgs_enviada: normalizedMessage,
+    };
+
+    try {
+      const response = await fetch(
+        "https://infra-n8nserver.mundodosfiltros.com.br/webhook/8b4f62ae-ba89-4e5f-ad6a-2e019ffb22e4",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (response.ok) {
+        console.log("Webhook enviado com sucesso!");
+        // opcional: feedback pro usuário
+      } else {
+        console.error("Erro ao enviar webhook:", response.statusText);
+      }
+    } catch (error) {
+      console.error("Erro na requisição do webhook:", error);
+    }
+  };
+
+
 
   return (
     <div className="container mx-auto p-4">
@@ -304,16 +377,16 @@ Venda Manual: ${campaignSummary.salesManual}
               <div>
                 <Label htmlFor="campaign">Campanha</Label>
                 <div className="flex items-center space-x-2 mt-2">
-                  <Input 
-                    name="campaign" 
-                    id="campaign" 
-                    placeholder="Nome da campanha" 
-                    value={campaign} 
+                  <Input
+                    name="campaign"
+                    id="campaign"
+                    placeholder="Nome da campanha"
+                    value={campaign}
                     onChange={(e) => setCampaign(e.target.value)}
                     disabled={searchEmptyCampaign}
                   />
                   <div className="flex items-center space-x-1">
-                    <Checkbox 
+                    <Checkbox
                       id="empty-campaign"
                       checked={searchEmptyCampaign}
                       onCheckedChange={(checked) => setSearchEmptyCampaign(Boolean(checked))}
@@ -346,7 +419,7 @@ Venda Manual: ${campaignSummary.salesManual}
                 {isLoading ? 'Buscando...' : 'Buscar IDs'}
               </Button>
               <Button type="button" variant="outline" onClick={handleGenerateCampaignSummary} disabled={isLoading}>
-                {isLoading ? 'Gerando...' : 'Resumo Campanha'}
+                {isLoading ? 'Gerando...' : 'Resumo Campanha IA'}
               </Button>
             </div>
           </form>
@@ -444,23 +517,87 @@ Venda Manual: ${campaignSummary.salesManual}
         <Card className="mt-8">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Resumo da Campanha</CardTitle>
-            <Button variant="ghost" size="icon" onClick={handleCopySummary}>
-              {isCopied ? <Check className="h-4 w-4 text-green-500" /> : <ClipboardCopy className="h-4 w-4" />}
-            </Button>
+            <div className="flex gap-2">
+              {/* Botão copiar */}
+              <Button variant="ghost" size="icon" onClick={handleCopySummary}>
+                {isCopied ? <Check className="h-4 w-4 text-green-500" /> : <ClipboardCopy className="h-4 w-4" />}
+              </Button>
+              {/* Botão enviar webhook */}
+              <Button variant="ghost" size="icon" onClick={handleSendWebhook}>
+                🚀
+              </Button>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <p><strong>Campanha:</strong> {campaignSummary.campaignNames}</p>
-            <p><strong>Dt. Envio:</strong> {campaignSummary.dateRange}</p>
-            <p><strong>Total de clientes:</strong> {campaignSummary.totalClients}</p>
-            <p><strong>Total de telefones:</strong> {campaignSummary.totalPhones}</p>
-            <p><strong>Total Lida:</strong> {campaignSummary.totalRead}</p>
-            <p><strong>Total Entregue:</strong> {campaignSummary.totalDelivered}</p>
-            <p><strong>Total de Respostas pelo Hablla:</strong> {campaignSummary.totalHabllaResponses}</p>
-            <p className="pl-4">* WhatsApp: (Dado não disponível)</p>
-            <p className="pl-4">* Ligação: (Dado não disponível)</p>
-            <p className="pl-4">* Não quero contato: (Dado não disponível)</p>
-            <p><strong>Venda IA:</strong> {campaignSummary.salesIA}</p>
-            <p><strong>Venda Manual:</strong> {campaignSummary.salesManual}</p>
+          <CardContent className="space-y-2 text-base">
+            <p className='flex flex-row gap-2 items-center'>ö
+              <ChartBarBig className="h-4 w-4" />
+              <strong>Campanha:</strong> {campaignSummary.campaignNames}
+            </p>
+            <p className='flex flex-row gap-2 items-center'>
+              <CalendarDays className="h-4 w-4" />
+              <strong>Dt. Envio:</strong> {campaignSummary.dateRange}
+            </p>
+            <p className='flex flex-row gap-2 items-center'>
+              <CircleUserRound className="h-4 w-4" />
+              <strong>Total de clientes:</strong> {campaignSummary.totalClients}
+            </p>
+            <p className='flex flex-row gap-2 items-center'>
+              <Phone className="h-4 w-4" />
+              <strong>Total de telefones:</strong> {campaignSummary.totalPhones}
+            </p>
+            <p className='flex flex-row gap-2 items-center'>
+              <MailCheck className="h-4 w-4" />
+              <strong>Total Entregue:</strong> {campaignSummary.totalDelivered}
+            </p>
+            <p className='flex flex-row gap-2 items-center'>
+              <CheckCheck className="h-4 w-4" />
+              <strong>Total Lida:</strong> {campaignSummary.totalRead}
+            </p>
+            <p className='flex flex-row gap-2 items-center'>
+              <MessageCircleMore className="h-4 w-4" />
+              <strong>Total de Respostas pelo Hablla:</strong> {campaignSummary.totalHabllaResponses}
+            </p>
+
+            <p className="pl-4 flex flex-row gap-2 items-center">
+              <CircleCheckBig className="h-4 w-4" />WhatsApp: (Dado não disponível)
+            </p>
+            <p className="pl-4 flex flex-row gap-2 items-center">
+              <CircleCheckBig className="h-4 w-4" />Ligação: (Dado não disponível)
+            </p>
+            <p className="pl-4 flex flex-row gap-2 items-center">
+              <CircleCheckBig className="h-4 w-4" />Não quero contato: (Dado não disponível)
+            </p>
+
+            <p className='flex flex-row gap-2 items-center'>
+              <Bot className="h-4 w-4" />
+              <strong>Venda IA:</strong> {campaignSummary.salesIA}
+            </p>
+            <p className='flex flex-row gap-2 items-center'>
+              <UserRound className="h-4 w-4" />
+              <strong>Venda Manual:</strong> {campaignSummary.salesManual}
+            </p>
+            <p className="flex flex-row gap-2 items-center">
+              <Mails className="h-4 w-4" /><strong>Mensagem enviada:</strong>
+            </p>
+            {/* <div className='pl-4 space-y-2'>
+              <hr />
+              <p className='my-2 font-bold'>Lembrete de Troca de Refil</p>
+              <p>Chegou o momento de trocar o refil do seu Purificador Soft/Everest!</p>
+              <p>💧 A qualidade da água que você consome é essencial para a sua saúde e bem-estar.</p>
+              <p>⚠️ Atenção: Refil vencido pode comprometer a pureza da água e a eficiência da purificação.</p>
+              <p>Não esqueça de agendar a próxima troca!</p>
+              <p>* Quero agendar</p>
+              <p>* Não quero contato</p>
+              <hr />
+            </div> */}
+            <div className="pl-4 space-y-2">
+              <hr />
+              {normalizedMessage.split("\n").map((line, i) => (
+                <p key={i} dangerouslySetInnerHTML={{ __html: parseWhatsAppFormatting(line) }} />
+              ))}
+              <hr />
+            </div>
+
           </CardContent>
         </Card>
       )}

@@ -28,4 +28,4 @@ Para iniciar o servidor em modo de desenvolvimento, execute:
 npm run dev
 ```
 
-O servidor estará disponível em `http://localhost:3001`.
+O servidor estará disponível em `http://localhost:3005`.
