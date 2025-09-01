@@ -21,15 +21,17 @@ interface DatePickerProps {
 }
 
 export function DatePicker({ placeholder, date, setDate }: DatePickerProps) {
+  const [open, setOpen] = React.useState(false);
+
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <div className="relative">
           <Button
             type="button"
             variant={'outline'}
             className={cn(
-              'w-full justify-start text-left font-normal',
+              'pr-7 w-full justify-between text-left font-normal',
               !date && 'text-muted-foreground'
             )}
           >
@@ -51,7 +53,7 @@ export function DatePicker({ placeholder, date, setDate }: DatePickerProps) {
                 setDate(undefined);
               }}
             >
-              <X className="h-4 w-4" />
+              <X className="h-5 w-5 text-red-600" />
             </Button>
           )}
         </div>
@@ -60,7 +62,10 @@ export function DatePicker({ placeholder, date, setDate }: DatePickerProps) {
         <Calendar
           mode="single"
           selected={date}
-          onSelect={setDate}
+          onSelect={(selectedDate) => {
+            setDate(selectedDate);
+            setOpen(false);
+          }}
           initialFocus
           locale={ptBR}
         />

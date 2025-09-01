@@ -9,9 +9,8 @@ import { ModeToggle } from '@/components/mode-toggle';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  ClipboardCopy, Check, ChartBarBig, CalendarDays,
-  CircleUserRound, Phone, MessageCircleMore, Bot, UserRound, MailCheck, CheckCheck, CircleCheckBig, Mails,
-  Webhook
+  ClipboardCopy, Check, BarChartBig, CalendarDays, CircleUserRound, Phone, MessageCircleMore,
+  Bot, UserRound, MailCheck, CheckCheck, CircleCheckBig, Mails, Webhook
 } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -524,13 +523,13 @@ ${normalizedMessage}
               </Button>
               {/* Botão enviar webhook */}
               <Button variant="ghost" size="icon" onClick={handleSendWebhook}>
-                🚀
+                <Webhook className='h-4 w-4' />
               </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-2 text-base">
-            <p className='flex flex-row gap-2 items-center'>ö
-              <ChartBarBig className="h-4 w-4" />
+            <p className='flex flex-row gap-2 items-center'>
+              <BarChartBig className="h-4 w-4" />
               <strong>Campanha:</strong> {campaignSummary.campaignNames}
             </p>
             <p className='flex flex-row gap-2 items-center'>

@@ -127,8 +127,31 @@ Respostas" (baseado no histórico de `moves`).
 - **Correções de Bugs:**
     - Resolve um erro crítico de importação (`Select is not defined`) que impedia a aplicação de carregar.
 
+## 7. Atualizações realizadas no Commit 7
+- Nome do botão "Resumo Campanha" foi atualizado para "Resumo Campanha IA"
 
-## 6. Próximos Passos e Instruções
+- O relatorio foi atualizado e o layout foi complementado com icones do Lucide React
+
+- Adicionada uma função nova para realizar a normalizacao do texto que será recebido do banco de dados com o template de mensagem que estava perdendo a formatação.
+
+- A função de copiar o resultado da campanha foi atualizado para retornar o novo formato do resumo e adicionado os emojis.
+
+- Adicionado um botão de Webhook ao lado do botão de copiar na tela de resumo para que seja envidas as variaveis do resumo que foi gerado para um fluxo que envia essa mensagem pelo Telegram/WhatsApp.
+
+## 8. Correçoes e ajustes (Commit 8)
+- O tema light e dark estavam setados com as mesmas cores, fazendo com que ao clicar no botão de alterar tema nada ocorresse. As cores dos foram ajustadas para que o tema light tenha cores que façam sentido no arquivo index.css na pasta /frontend/src.
+
+- Datapicker correcao visual e melhoria de usabilidade
+    - A correção foi um ajuste no botão do X que remove a data que foi escolhida pelo usuario. O X estava em cima da data e com a cor branca, o que fazia que ficasse dificil de visualizar o botão e a data. Foi adicionado um padding-right de 1.75rem (28px) para que o X não fique em cima da data e foi alterada a cor para vermelho.
+    - A melhoria de usabilidade foi um controle de estado de abertura do DatePicker. Quando o usuario escolher a data o DatePicker será fechado automaticamente.
+
+- O botão de envio via webhook que estava com um emoji de foguete e o icone do lucide fora do botão.
+
+- A biblioteca do lucide-react foi atualizada para a ultima versão.
+
+- O nome do icone de barras do lucide foi corrido. (BarChartBig)
+
+## 9. Próximos Passos e Instruções
 
 ### Pendências Atuais
 
