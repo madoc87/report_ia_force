@@ -1,0 +1,80 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "_delay_startup",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "Start-Sleep -Seconds 3"
+            ],
+            "presentation": {
+                "reveal": "never",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "frontend",
+            "type": "shell",
+            "command": "npm run dev",
+            "options": {
+                "cwd": "${workspaceFolder}/frontend"
+            },
+            "presentation": {
+                "panel": "dedicated",
+                "clear": true,
+                "focus": false
+            }
+        },
+        {
+            "label": "backend",
+            "type": "shell",
+            "command": "npm run dev",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "presentation": {
+                "panel": "dedicated",
+                "clear": true,
+                "focus": true
+            }
+        },
+        {
+            "label": "gem",
+            "type": "shell",
+            "command": "gemini",
+            "presentation": {
+                "panel": "dedicated",
+                "clear": true,
+                "focus": false
+            }
+        },
+        {
+            "label": "_start_all",
+            "dependsOrder": "parallel",
+            "dependsOn": [
+                "frontend",
+                "backend",
+                "gem"
+            ]
+        },
+        {
+            "label": "🚀 Iniciar Report IA Force",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "_delay_startup",
+                "_start_all"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "runOptions": {
+                "runOn": "folderOpen"
+            }
+        }
+    ]
+}

@@ -16,8 +16,8 @@ Este diretório contém o código-fonte do servidor backend.
 2.  Adicione as seguintes variáveis de ambiente ao arquivo `.env`:
 
     ```
-    WORKSPACE_ID_HABLLA=seu_workspace_id
-    API_TOKEN_HABLLA=seu_token_de_api
+    WORKSPACE_ID=seu_workspace_id
+    API_TOKEN=seu_token_de_api
     ```
 
 ## Execução

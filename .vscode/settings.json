@@ -1,0 +1,11 @@
+{
+    "python.terminal.activateEnvironment": false,
+    "terminal.integrated.environmentChangesIndicator": "off",
+    "terminal.integrated.tabs.enabled": true,
+    // "terminal.integrated.inheritEnv": false, // <--- Impede que o terminal herde variáveis globais
+    // "terminal.integrated.env.windows": {
+    //     "PYTHONPATH": "" // <--- Limpa o caminho do Python especificamente no terminal
+    // },
+    "terminal.integrated.shellIntegration.showWelcome": false
+    // "terminal.integrated.shellIntegration.enabled": false
+}

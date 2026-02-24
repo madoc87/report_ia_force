@@ -219,5 +219,155 @@ Para criar um novo repositório no GitHub e enviar este projeto (frontend e back
 Após esses passos, todo o seu código (backend e frontend) estará no repositório do GitHub.
 
 
+## 10. Atualização de Lógica de Negócio (14/01/2026)
 
+- **Correção no cálculo de mensagens não recebidas:**
+    - A lógica para identificar mensagens não recebidas (`notReceivedMsg`) foi atualizada para ser mais robusta.
+    - Agora busca diretamente pelo ID da coluna "Tentativa de contato [IA]" (`6852ca77894e7f357ac3ca09`).
+    - Verifica se o status do cartão é 'lost' (perdido).
+    - Verifica a presença da TAG específica "IA - Mgs não enviada" (ID `689214de8385d506466c22ff`), ao invés de buscar por motivos de perda/fechamento que não são retornados pela API.
 
+## 11. Melhoria no Filtro de Campanhas (14/01/2026)
+
+- **Novo componente MultiSelectCampaign:**
+    - Substituído o campo de input simples de Campanha por um novo componente de seleção múltipla (`MultiSelectCampaign`).
+    - O novo componente permite:
+        - Selecionar múltiplas campanhas de uma lista pré-definida.
+        - Buscar campanhas por nome, data ou mês.
+        - Adicionar manualmente novas campanhas que não estão na lista (função "Creatable").
+    - A lista de campanhas é alimentada pela constante `campaignsData` no arquivo `App.tsx`.
+- **Lógica de Filtro:**
+    - A filtragem de campanhas agora suporta múltiplas seleções, filtrando os resultados localmente para garantir que todos os cartões correspondentes a qualquer uma das campanhas selecionadas sejam exibidos.
+
+## 12. Otimização de Performance na Busca (14/01/2026)
+
+- **Envio de Campanha como Query Parameter:**
+    - A função `performSearch` no frontend foi otimizada para enviar o nome da campanha como um parâmetro de busca para a API da Hablla quando apenas uma campanha está selecionada. Isso reduz drasticamente a quantidade de dados processados e páginas consultadas.
+    - O filtro exato permanece no frontend para garantir a precisão, já que a API retorna resultados por semelhança.
+- **Melhoria no Backend:**
+    - A função `fetchHabllaAPI` no backend foi atualizada para lidar corretamente com arrays em `queryParams`, permitindo maior flexibilidade em futuras expansões.
+
+## 13. Persistência de Dados e Cache de Relatórios (03/02/2026)
+
+- **Integração com SQLite no Backend:**
+    - Implementada a biblioteca `sqlite3` para armazenamento local de resumos de campanhas.
+    - Criada a tabela `campaign_summaries` para cachear os cálculos de "Resumo Campanha IA".
+    - A lógica de negócio para o cálculo do resumo foi migrada do frontend para o backend (`calculateSummary`), garantindo consistência e centralização das regras.
+- **Estratégia de Cache "Cache-First":**
+    - Ao gerar o "Resumo Campanha IA", o sistema agora verifica primeiro se os dados já existem no banco local.
+    - Se existirem, os dados são retornados instantaneamente, melhorando significativamente a velocidade da aplicação.
+    - Se não existirem, o backend realiza a consulta na API da Hablla, salva no banco e retorna os resultados.
+- **Funcionalidade de Atualização (Refresh):**
+    - Adicionado um botão de "Atualizar Campanha" (ícone `RotateCcw`) na interface de resumo.
+    - Este botão força o backend a ignorar o cache, realizar uma nova consulta à API da Hablla e atualizar o registro no banco de dados SQLite.
+- **Melhorias na Interface (UX):**
+    - O cabeçalho do resumo agora exibe a data e hora da "Última atualização" dos dados salvos no banco.
+    - Adicionados `tooltips` e títulos aos botões de ação (Copiar, Webhook, Atualizar) para melhor clareza.
+- **Qualidade e Build:**
+    - Corrigidos erros de TypeScript relacionados a variáveis não utilizadas (`defaultsSet`).
+    - Adicionada a dependência `sqlite` para facilitar o uso de `async/await` com o banco de dados.
+
+## 14. Estabilidade e Agregação de Campanhas (03/02/2026)
+
+- **Resiliência de Conexão (Backend):**
+    - Implementado um mecanismo de *retry* (3 tentativas) na comunicação com a API da Hablla.
+    - Isso resolve falhas de rede intermitentes (como `socket hang up` ou `ECONNRESET`) que ocorriam durante atualizações em lote, garantindo maior estabilidade no processo de extração de dados.
+- **Atualização em Lote (Frontend):**
+    - Adicionado o botão "Atualizar Todas as Campanhas" (`RefreshCw`) na interface principal.
+    - Permite que o usuário atualize o cache de todas as campanhas cadastradas (`campaignsData`) com um único clique.
+    - Ao final, exibe um relatório detalhado informando o número de sucessos e listando nominalmente as campanhas que falharam, facilitando a correção manual.
+- **Agregação de Múltiplas Campanhas:**
+    - O relatório "Resumo Campanha IA" agora suporta a seleção de múltiplas campanhas simultaneamente.
+    - **Lógica de Agregação:** O backend processa cada campanha individualmente (buscando do cache ou da API) e, em seguida, unifica os resultados.
+    - Os valores absolutos (Total de Clientes, Telefones, Vendas, Custos) são somados, enquanto as taxas e porcentagens (Conversão, Resposta, Ticket Médio) são recalculadas com base nos totais consolidados, oferecendo uma visão analítica precisa do grupo de campanhas selecionado.
+- **Refatoração de Endpoints:**
+    - Os endpoints `/api/campaign-summary` e `/refresh` foram atualizados para aceitar listas de campanhas separadas por vírgula, viabilizando a funcionalidade de agregação.
+
+## 15. Responsividade e Layout Dinâmico (11/02/2026)
+
+- **Sidebar Adaptável:**
+    - Refatoração da `Sidebar` para utilizar posicionamento `sticky` em desktops, garantindo que o menu acompanhe a rolagem sem sobrepor o conteúdo.
+    - Implementação de comportamento "drawer" (menu lateral deslizante) para dispositivos móveis, controlado por um estado global e um overlay de fundo.
+- **Layout Fluído e Dinâmico:**
+    - Reestruturação do componente `App.tsx` para utilizar uma arquitetura de layout flexível que se ajusta automaticamente à presença ou ausência da sidebar.
+    - Uso de `min-w-0` e `overflow-hidden` para garantir que gráficos e tabelas (especialmente no Dashboard) não quebrem o layout em telas menores.
+- **Interface Mobile-First:**
+    - Adicionado um cabeçalho fixo para dispositivos móveis com botão de menu ("hambúrguer") para facilitar a navegação em telas pequenas.
+    - O `Dashboard` agora detecta o clique no menu e sincroniza a abertura da sidebar através de callbacks.
+    - Ajustes de padding e tamanhos de fonte responsivos em toda a aplicação para melhor legibilidade no mobile.
+- **Gestão de Menus na Sidebar:**
+    - Adicionada a propriedade `enabled` ao array `menuItems` para facilitar a ativação/desativação de funcionalidades.
+    - Menus inativos (Vendas, Produtos, Clientes, etc.) agora aparecem com estilo visual desabilitado (`opacity-50` e `cursor-not-allowed`) e têm seus cliques bloqueados.
+
+## 16. Correções de Sintaxe e Estabilidade do Build (11/02/2026)
+
+- **Correção de Erro de Sintaxe JSX:**
+    - Resolvido o erro `Unterminated JSX contents` no arquivo `App.tsx` que impedia a aplicação de carregar. Foram adicionadas as tags de fechamento faltantes (`</main>` e `</div>`).
+- **Resolução de Erros de Compilação (TypeScript):**
+    - Corrigido erro de tipagem no componente `Checkbox` onde a propriedade `displayName` do `CheckboxPrimitive` não era reconhecida pelo TypeScript.
+    - Removidas diversas variáveis e importações não utilizadas em múltiplos componentes (`Dashboard`, `Sidebar`, `ModeToggle`, `Calendar`, `MultiSelectCampaign`, `MultiSelectCombobox`) para satisfazer as regras de linting do `tsconfig.json` (`noUnusedLocals`).
+- **Verificação de Build:**
+    - O comando `npm run build` no frontend agora completa com sucesso, garantindo a integridade do código e permitindo a execução correta da aplicação.
+
+## 17. Centralização de Dados e Melhorias no Dashboard (11/02/2026)
+
+- **Compartilhamento de Dados:**
+    - A constante `campaignsData` foi movida para um arquivo centralizado em `frontend/src/lib/campaigns.ts`, permitindo que tanto a tela de Relatórios quanto o Dashboard utilizem a mesma fonte de dados.
+- **Refinamento de Filtros no Dashboard:**
+    - Adicionado suporte para desconsiderar automaticamente campanhas marcadas como "Não enviado".
+    - Implementado um sub-filtro de mês para o modo "Campanhas Individuais", permitindo filtrar as campanhas exibidas por um mês específico ou ver "Todas" (padrão).
+- **Evolução de Vendas Cronológica:**
+    - O gráfico de "Evolução de Vendas" foi ajustado para exibir um ponto para cada campanha selecionada.
+    - Os dados agora são ordenados cronologicamente seguindo a lógica do mês e do número do disparo (ex: "D01-Jan" vem antes de "D02-Jan"), proporcionando uma visão real da evolução dos disparos.
+- **Formatação de Moeda e Dados:**
+    - Todos os valores de receita (`revenue`) e ticket médio no Dashboard agora são exibidos no formato de moeda brasileiro (R$) com duas casas decimais.
+    - Melhorada a lógica de agrupamento para garantir que a ordem original das campanhas seja preservada ao consolidar os dados.
+
+## 18. Correções de Referência e Interfaces (11/02/2026)
+
+- **Restauração de Constantes:**
+    - Corrigido o erro `ReferenceError: boards is not defined` no `App.tsx` através da restauração da constante `boards` que havia sido removida acidentalmente durante uma refatoração.
+- **Ajuste de Tipagem:**
+    - Corrigidas as interfaces `ReportCard` e `CampaignSummary` no `App.tsx` para garantir que todas as propriedades necessárias para a renderização da interface (como `id`, `name`, `tags`, etc.) estejam presentes, resolvendo falhas de carregamento da aplicação.
+
+## 19. Ajuste de Cores da Sidebar (11/02/2026)
+
+- **Compatibilidade de Temas:**
+    - Substituídas as cores estáticas (como `text-zinc-200` e `text-zinc-600`) por variáveis semânticas do Tailwind (`text-foreground`, `text-muted-foreground`, `bg-accent`).
+    - Isso corrige o problema de leitura no tema claro, onde os textos permaneciam brancos, e garante que a sidebar se adapte automaticamente às cores do tema ativo (Light/Dark mode).
+
+## 20. Sistema de Notificações (11/02/2026)
+    
+- **Gestão Global de Notificações:**
+    - Implementado um estado global de notificações no `App.tsx` com suporte a diferentes tipos (`info`, `success`, `warning`, `error`).
+    - Criada a funcionalidade `addNotification` para permitir o disparo de alertas em qualquer parte da aplicação.
+- **Notificação de Atualização:**
+    - Ao finalizar o processo de "Atualizar Todas as Campanhas", o sistema agora gera automaticamente uma notificação detalhando o número de campanhas atualizadas e eventuais falhas.
+- **Interface de Notificações (Sino):**
+    - O ícone de sino no Dashboard foi transformado em um `Popover` interativo que exibe a lista de notificações recentes.
+    - Adicionado um contador visual (badge) para notificações não lidas.
+    - Implementada a funcionalidade de "Marcar como lidas" ao abrir o menu e "Limpar tudo" para remover o histórico.
+    - O sistema foi desenhado de forma extensível, permitindo que futuras funcionalidades (como alertas de erro de API ou finalização de relatórios longos) utilizem a mesma infraestrutura.
+
+## 21. Refatoração de Interface e Correção de Notificações (24/02/2026)
+
+- **Criação do Componente Header:**
+    - Extração de toda a lógica e UI do cabeçalho da aplicação que antes residia internamente no componente `Dashboard` para um componente global reutilizável `<Header />` (`frontend/src/components/header.tsx`).
+    - A atualização permite que diferentes páginas (como a tela de Dashboard e a tela de Relatórios) compartilhem o mesmo cabeçalho, mantendo uniformidade no título, exibição de data atual e menu lateral (Mobile).
+- **Adequação do Sistema de Notificações:**
+    - Toda a lógica de exibição, listagem, limpeza ou gerenciamento de leitura (`markAllAsRead`, `clearNotifications`) pertinente ao sino de notificações agora compõe o novo componente `Header`.
+    - Correção do Bug de Feedback (`addNotification`) em campanhas atualizadas unicamente. Agora o sistema dispara uma notificação visível com a mensagem "Os dados de {NomeDaCampanha} foram atualizados com sucesso" assim que a ação do botão "Atualizar Campanha" for completada com êxito na tela de Relatórios.
+    - Melhoria no formato de timestamp no componente visual de notificações (`header.tsx`): convertida a exibição exclusiva de horário (`17:46:52`) para incluir nativamente a data corrente em formato curto e conciso junto a hora (`24/02/26, 17:46`).
+
+## 22. Aperfeiçoamentos Visuais no Dashboard e Documentação (24/02/2026)
+
+- **Métricas Expandidas no Gráfico:**
+    - Adicionado suporte as variáveis de `conversionSalesClients` (Conversão Vendas) e `conversionSalesResponses` (Conversão IA) no agrupamento de relatórios.
+    - Implementação de um `CustomTooltip` customizado escuro no gráfico "Evolução de Vendas" de forma a reler as taxas percentuais ativas e listar ativamente 3 métricas vitais abaixo do balão sempre que o usuário realizar hover em linhas: `Receita`, `Conversão Vendas` e `Conversão IA`.
+- **Dinâmica Visual de Cartões Estatísticos (StatsCard):**
+    - Configuração progressiva na variação de cor e flecha baseada em resultados (`trend`). Quando se existe uma variação negativa contra o mês anterior a flecha muda do tom verde para vermelho com sentido para baixo (`ArrowDownRight`), atuando como um alerta visual intuitivo.
+    - Otimizada a visibilidade de labels estáticas abaixo da métricas onde caso o "Modo de Filtro" exija a apresentação isolada ou abrangente em "Todas" o `StatsCard` omite indicativos de percentuais comparativos do trend limitando-se unicamente ao indicativo "no período".
+- **Refatoração Estrutural de Documentação:**
+    - Desassociação e generalização sistêmica: Arquivos como `.env` e todo o teor referencial do `README.md` raiz, antes estritamente fixados com nomes relativos à conta *Hablla*, foram transpostos e renomeados a adotarem nomes lógicos da aplicação genéricos (`WORKSPACE_ID`). 
+    - O `README.md` global foi completamente formatado removendo longos JSONs crús do manual e ajustando queries de exemplos.
+- **Base de Dados Fictícia:** Nova campanha incorporada listada em `src/lib/campaigns.ts` como "HB NÃO ATENDE JAN 2026.01".
