@@ -4,6 +4,8 @@ import cors from 'cors';
 import fetch from 'node-fetch';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 
 const app = express();
 const port = process.env.PORT || 3005;
@@ -12,11 +14,70 @@ app.use(cors());
 app.use(express.json());
 
 const HABLLA_API_URL = 'https://api.hablla.com';
-const { WORKSPACE_ID_HABLLA, API_TOKEN_HABLLA } = process.env;
+const { WORKSPACE_ID_HABLLA, API_TOKEN_HABLLA, APP_PASSWORD, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD } = process.env;
+
+const jwtSecret = JWT_SECRET || 'secret123';
 
 // Log para verificar as variáveis de ambiente
 console.log('Workspace ID:', WORKSPACE_ID_HABLLA ? 'Carregado' : 'Não encontrado');
 console.log('API Token:', API_TOKEN_HABLLA ? 'Carregado' : 'Não encontrado');
+
+// Middleware de Autenticação
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (token == null) return res.status(401).json({ message: 'Token de autenticação não fornecido' });
+
+  jwt.verify(token, jwtSecret, (err, decodedUser) => {
+    if (err) return res.status(403).json({ message: 'Token de autenticação inválido' });
+    req.user = decodedUser;
+    next();
+  });
+};
+
+// Middleware para autorizar apenas administradores
+const authorizeAdmin = (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    res.status(403).json({ message: 'Acesso negado. Apenas administradores podem realizar esta ação.' });
+  }
+};
+
+// Rota de Teste de Status do Servidor
+app.get('/test', (req, res) => {
+  res.status(200).json({ status: 'ok', message: 'Servidor backend do Report IA Force executando corretamente!' });
+});
+
+// Rota de Login
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ message: 'E-mail e senha são obrigatórios.' });
+
+  try {
+    const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+    if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
+
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
+
+    const payload = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      theme: user.theme || 'dark',
+      force_password_change: user.force_password_change === 1
+    };
+
+    const token = jwt.sign(payload, jwtSecret, { expiresIn: '12h' });
+    res.status(200).json({ token, user: payload });
+  } catch (error) {
+    console.error('Erro de login:', error);
+    res.status(500).json({ message: 'Erro no servidor.', error: error.message });
+  }
+});
 
 // --- SQLite Setup ---
 let db;
@@ -48,6 +109,54 @@ let db;
         UNIQUE(campaign_name, board_id)
       )
     `);
+
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT DEFAULT 'user',
+        force_password_change INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Atualiza tabela antiga para adicionar coluna de tema, caso não exista
+    try {
+      await db.exec(`ALTER TABLE users ADD COLUMN theme TEXT DEFAULT 'dark'`);
+    } catch (err) { }
+
+    // User generation or recovery mechanism via .env
+    if (ADMIN_EMAIL && ADMIN_PASSWORD) {
+      const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+      const existingAdmin = await db.get('SELECT id FROM users WHERE email = ?', [ADMIN_EMAIL]);
+
+      if (existingAdmin) {
+        // Recover/Update password and role
+        await db.run('UPDATE users SET password_hash = ?, role = "admin", force_password_change = 0 WHERE email = ?', [adminHash, ADMIN_EMAIL]);
+        console.log(`[Segurança] Acesso Admin recuperado: A conta '${ADMIN_EMAIL}' foi detectada e redefinida com a senha contida no arquivo .env.`);
+      } else {
+        // Create new
+        await db.run(
+          'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
+          ['Admin do Sistema', ADMIN_EMAIL, adminHash, 'admin', 0]
+        );
+        console.log(`[Segurança] Usuário Admin gerado a partir do arquivo .env: ${ADMIN_EMAIL}`);
+      }
+    } else {
+      // Create default admin user if no users exist (fallback)
+      const userCount = await db.get('SELECT COUNT(*) as count FROM users');
+      if (userCount.count === 0) {
+        const defaultPasswordHash = await bcrypt.hash(APP_PASSWORD || 'admin123', 10);
+        await db.run(
+          'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
+          ['Admin', 'admin@mf.com', defaultPasswordHash, 'admin', 0]
+        );
+        console.log('Nenhuma conta .env detectada. Usuário admin gerado por padrão: admin@mf.com / admin123');
+      }
+    }
+
     console.log('SQLite database initialized.');
   } catch (error) {
     console.error('Failed to initialize SQLite:', error);
@@ -90,9 +199,9 @@ const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
         if (!response.ok) {
           // Se for erro de servidor (5xx) ou Rate Limit (429), lança erro para cair no catch e tentar de novo
           if (response.status >= 500 || response.status === 429) {
-             throw new Error(`Server error: ${response.status}`);
+            throw new Error(`Server error: ${response.status}`);
           }
-          
+
           // Se for erro 4xx (exceto 429), é erro definitivo (ex: 400, 401), não adianta tentar de novo
           const errorBody = await response.text();
           console.error('API Error Body:', errorBody);
@@ -106,17 +215,17 @@ const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
 
       } catch (error) {
         attempt++;
-        const isRetriable = error.message.includes('ECONNRESET') || 
-                            error.message.includes('socket hang up') || 
-                            error.message.includes('Server error') ||
-                            error.code === 'ECONNRESET';
+        const isRetriable = error.message.includes('ECONNRESET') ||
+          error.message.includes('socket hang up') ||
+          error.message.includes('Server error') ||
+          error.code === 'ECONNRESET';
 
         if (isRetriable && attempt < maxRetries) {
           console.warn(`Attempt ${attempt} failed for page ${page}. Retrying in 1s... Error: ${error.message}`);
           await new Promise(resolve => setTimeout(resolve, 1000));
         } else {
           // Se esgotou as tentativas ou não é erro de rede, repassa o erro para parar o processo
-          throw error; 
+          throw error;
         }
       }
     }
@@ -130,7 +239,7 @@ const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
 // --- Helper: Calculate Summary ---
 const calculateSummary = (cards, boardName) => {
   const campaignNames = [...new Set(cards.map(c => c.campaign).filter(Boolean))].join(', ') || 'N/A';
-  
+
   const dates = cards.map(c => new Date(c.created_at).getTime());
   let dateRange = 'N/A';
   if (dates.length > 0) {
@@ -143,7 +252,7 @@ const calculateSummary = (cards, boardName) => {
 
   const totalClients = new Set(cards.map(c => c.name)).size;
   const totalPhones = cards.length;
-  
+
   const totalHabllaResponses = cards.filter(c =>
     c.list !== "6852ca77894e7f357ac3ca09" &&
     c.list !== "68641e2511228ce80a6c7729"
@@ -152,7 +261,7 @@ const calculateSummary = (cards, boardName) => {
   const salesIA = cards.filter(c =>
     c.tags?.some(t => t.name === "IA - Venda IA" || t.name === "IA - Venda Manual")
   ).length;
-  
+
   const salesManual = cards.filter(c => c.tags?.some(t => t.name === "IA - Venda Operador")).length;
 
   const notReceivedMsg = cards.filter(c =>
@@ -264,11 +373,11 @@ const processCampaign = async (campaignName, boardId, boardName, filters, forceR
     )
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`,
     [
-      campaignName, boardId, summary.board, summary.dateRange, 
-      summary._raw.totalClients, summary._raw.totalPhones, 
-      summary._raw.totalHabllaResponses, summary._raw.salesIA, 
+      campaignName, boardId, summary.board, summary.dateRange,
+      summary._raw.totalClients, summary._raw.totalPhones,
+      summary._raw.totalHabllaResponses, summary._raw.salesIA,
       summary._raw.salesManual, summary._raw.notReceivedMsg,
-      summary.totalCost, summary.averageSold, summary.responseRate, 
+      summary.totalCost, summary.averageSold, summary.responseRate,
       summary.conversionSalesClients, summary.conversionSalesResponses
     ]
   );
@@ -355,7 +464,7 @@ const aggregateSummaries = (summaries) => {
 };
 
 
-app.get('/api/cards', async (req, res) => {
+app.get('/api/cards', authenticateToken, async (req, res) => {
   try {
     // O quadro 'IA Manutenção' é o padrão, mas permite que seja sobrescrito pela query
     const boardId = req.query.board || process.env.BOARD_ID_HABLLA;
@@ -377,7 +486,7 @@ app.get('/api/cards', async (req, res) => {
   }
 });
 
-app.get('/api/tags', async (req, res) => {
+app.get('/api/tags', authenticateToken, async (req, res) => {
   try {
     const data = await fetchHabllaAPI(`/v1/workspaces/${WORKSPACE_ID_HABLLA}/tags`);
     res.status(200).json(data);
@@ -387,7 +496,7 @@ app.get('/api/tags', async (req, res) => {
   }
 });
 
-app.get('/api/sectors', async (req, res) => {
+app.get('/api/sectors', authenticateToken, async (req, res) => {
   try {
     const data = await fetchHabllaAPI(`/v1/workspaces/${WORKSPACE_ID_HABLLA}/sectors`);
     res.status(200).json(data);
@@ -397,7 +506,7 @@ app.get('/api/sectors', async (req, res) => {
   }
 });
 
-app.get('/api/lists', async (req, res) => {
+app.get('/api/lists', authenticateToken, async (req, res) => {
   try {
     const boardId = req.query.board || process.env.BOARD_ID_HABLLA;
     const data = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/boards/${boardId}/lists`);
@@ -411,7 +520,7 @@ app.get('/api/lists', async (req, res) => {
 // --- New Endpoints for Campaign Summary ---
 
 // Get all summaries from database (for Dashboard)
-app.get('/api/all-summaries', async (req, res) => {
+app.get('/api/all-summaries', authenticateToken, async (req, res) => {
   try {
     const summaries = await db.all('SELECT * FROM campaign_summaries');
     const parsedSummaries = summaries.map(s => ({
@@ -428,7 +537,7 @@ app.get('/api/all-summaries', async (req, res) => {
   }
 });
 
-app.get('/api/dashboard-data', async (req, res) => {
+app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
   try {
     const data = await db.all('SELECT * FROM campaign_summaries ORDER BY last_updated DESC');
     res.status(200).json(data);
@@ -439,7 +548,7 @@ app.get('/api/dashboard-data', async (req, res) => {
 });
 
 // Get Summary (Cache-first) - Supports multiple campaigns (comma separated)
-app.get('/api/campaign-summary', async (req, res) => {
+app.get('/api/campaign-summary', authenticateToken, async (req, res) => {
   const { campaign, board, boardName, startDate, endDate, source, tags } = req.query;
 
   if (!campaign) {
@@ -474,7 +583,7 @@ app.get('/api/campaign-summary', async (req, res) => {
 });
 
 // Refresh Summary (Force Update) - Supports multiple campaigns
-app.post('/api/campaign-summary/refresh', async (req, res) => {
+app.post('/api/campaign-summary/refresh', authenticateToken, async (req, res) => {
   const { campaign, board, boardName, startDate, endDate, source, tags } = req.body;
 
   if (!campaign) {
@@ -504,6 +613,111 @@ app.post('/api/campaign-summary/refresh', async (req, res) => {
   } catch (error) {
     console.error('Error refreshing summary:', error);
     res.status(500).json({ message: 'Error refreshing summary', error: error.message });
+  }
+});
+
+// --- User Management Endpoints ---
+
+// Obter usuários (apenas Admin)
+app.get('/api/users', authenticateToken, authorizeAdmin, async (req, res) => {
+  try {
+    const users = await db.all('SELECT id, name, email, role, force_password_change, created_at FROM users');
+    res.status(200).json(users);
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao buscar usuários', error: error.message });
+  }
+});
+
+// Adicionar um novo usuário (apenas Admin)
+app.post('/api/users', authenticateToken, authorizeAdmin, async (req, res) => {
+  const { name, email, password, role = 'user' } = req.body;
+  if (!name || !email || !password) return res.status(400).json({ message: 'Todos os campos são obrigatórios' });
+
+  try {
+    const existingUser = await db.get('SELECT id FROM users WHERE email = ?', [email]);
+    if (existingUser) return res.status(400).json({ message: 'Este e-mail já está cadastrado.' });
+
+    const hash = await bcrypt.hash(password, 10);
+    const result = await db.run(
+      'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, 1)',
+      [name, email, hash, role]
+    );
+
+    res.status(201).json({ message: 'Usuário cadastrado com sucesso', id: result.lastID });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao cadastrar usuário', error: error.message });
+  }
+});
+
+// Admin força a troca de senha (definição de nova senha temporária pelo admin)
+app.put('/api/users/:id/reset-password', authenticateToken, authorizeAdmin, async (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ message: 'Preencha a nova senha.' });
+
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    await db.run('UPDATE users SET password_hash = ?, force_password_change = 1 WHERE id = ?', [hash, req.params.id]);
+    res.status(200).json({ message: 'Senha atualizada. O usuário será forçado a trocá-la no próximo acesso.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao resetar a senha', error: error.message });
+  }
+});
+
+// Admin exclui um usuário
+app.delete('/api/users/:id', authenticateToken, authorizeAdmin, async (req, res) => {
+  if (String(req.params.id) === String(req.user.id)) {
+    return res.status(400).json({ message: 'Você não pode excluir a sua própria conta.' });
+  }
+  try {
+    await db.run('DELETE FROM users WHERE id = ?', [req.params.id]);
+    res.status(200).json({ message: 'Usuário removido com sucesso.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao deletar usuário', error: error.message });
+  }
+});
+
+// Usuário escolhe a própria senha nova (forçado ou não)
+app.post('/api/change-password', authenticateToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) return res.status(400).json({ message: 'Ambas as senhas são exigidas.' });
+
+  try {
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (!user) return res.status(404).json({ message: 'Usuário não encontrado' });
+
+    const match = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!match) return res.status(401).json({ message: 'Senha atual não confere.' });
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    await db.run('UPDATE users SET password_hash = ?, force_password_change = 0 WHERE id = ?', [hash, req.user.id]);
+
+    const payload = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      force_password_change: false
+    };
+
+    const token = jwt.sign(payload, jwtSecret, { expiresIn: '12h' });
+
+    res.status(200).json({ message: 'Senha modificada com sucesso!', token, user: payload });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro interno.', error: error.message });
+  }
+});
+
+// Atualiza o prefixo do tema do usuário
+app.put('/api/users/theme', authenticateToken, async (req, res) => {
+  const { theme } = req.body;
+  if (!['light', 'dark', 'system'].includes(theme)) return res.status(400).json({ message: 'Tema inválido.' });
+
+  try {
+    await db.run('UPDATE users SET theme = ? WHERE id = ?', [theme, req.user.id]);
+    res.status(200).json({ message: 'Tema atualizado com sucesso.' });
+  } catch (error) {
+    console.error('Erro ao atualizar tema:', error);
+    res.status(500).json({ message: 'Erro no servidor.', error: error.message });
   }
 });
 

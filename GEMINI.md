@@ -89,6 +89,7 @@ npm run build
     - O Backend faz chamadas para a API externa da Hablla (`https://api.hablla.com`).
     - O Backend lida com a paginação da API externa automaticamente.
 - **Tipagem:** TypeScript é utilizado estritamente no frontend. Interfaces para os dados da API (ex: `ReportCard`, `Sector`, `CampaignSummary`) estão definidas no `App.tsx`.
+- **Novas funcionalidades:** Todas as novas funcionalidades devem ser desenvolvidas seguindo as convenções de desenvolvimento do projeto. E todas as novas funcionalidades devem ser documentadas no arquivo `CHANGELOG.md`.
 
 ## Detalhes da API Interna (Backend)
 

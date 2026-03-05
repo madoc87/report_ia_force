@@ -10,9 +10,11 @@ interface HeaderProps {
     onMenuClick?: () => void;
     notifications: Notification[];
     setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
+    user?: any;
+    onLogout?: () => void;
 }
 
-export function Header({ title, onMenuClick, notifications, setNotifications }: HeaderProps) {
+export function Header({ title, onMenuClick, notifications, setNotifications, user, onLogout }: HeaderProps) {
     const unreadCount = notifications.filter(n => !n.read).length;
 
     const markAllAsRead = () => {
@@ -101,14 +103,31 @@ export function Header({ title, onMenuClick, notifications, setNotifications }: 
                     </PopoverContent>
                 </Popover>
 
-                <div className="flex items-center gap-3 pl-2 md:pl-4 border-l">
+                <div className="flex items-center gap-3 pl-4 border-l border-border">
                     <div className="text-right hidden sm:block">
-                        <p className="text-sm font-bold">Admin</p>
-                        <p className="text-xs text-muted-foreground">admin@mf.com</p>
+                        <p className="text-sm font-medium text-foreground">{user?.name || 'Carregando...'}</p>
+                        <p className="text-xs text-muted-foreground">{user?.email || '...'}</p>
                     </div>
-                    <div className="w-8 h-8 md:w-10 md:h-10 bg-primary/10 rounded-full flex items-center justify-center text-primary font-bold">
-                        AD
-                    </div>
+
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <button className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold shadow-sm border border-primary/20 hover:scale-105 transition-transform" type="button">
+                                {user?.name?.[0] || 'U'}
+                            </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-48 p-2 mt-2" align="end">
+                            <div className="flex flex-col gap-1">
+                                {onLogout && (
+                                    <button
+                                        onClick={onLogout}
+                                        className="w-full text-left px-3 py-2 rounded text-sm font-medium hover:bg-primary/10 text-red-400 transition-colors"
+                                    >
+                                        Sair da Conta
+                                    </button>
+                                )}
+                            </div>
+                        </PopoverContent>
+                    </Popover>
                 </div>
             </div>
         </div>

@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { MultiSelectCombobox, Tag } from '@/components/ui/multi-select-combobox';
 import { MultiSelectCampaign } from '@/components/ui/multi-select-campaign';
 import { DatePicker } from '@/components/ui/date-picker';
-// import { ModeToggle } from '@/components/mode-toggle';
+import { useTheme } from '@/components/theme-provider';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
@@ -21,6 +21,9 @@ import { Sidebar } from '@/components/sidebar';
 import { Dashboard } from '@/components/dashboard';
 import { Header } from '@/components/header';
 import { campaignsData } from '@/lib/campaigns';
+import { Login } from '@/components/login';
+import { ChangePassword } from '@/components/change-password';
+import { Settings } from '@/components/settings';
 
 // Definição de Tipos para os dados da API
 export interface Notification {
@@ -95,6 +98,64 @@ function App() {
   const [activeTab, setActiveTab] = useState('relatorios');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [user, setUser] = useState<any | null>(() => {
+    const savedUser = localStorage.getItem('user');
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
+  const { theme, setTheme } = useTheme();
+
+  useEffect(() => {
+    if (token && user && user.theme && user.theme !== theme) {
+      // Evitar sobrescrever o tema do usuário logo após o login se o setTheme ainda estiver processando.
+      // Damos prioridade à mudança originada do clique do usuário:
+      const savedUser = JSON.parse(localStorage.getItem('user') || '{}');
+      if (savedUser.theme === theme) return; // Se for igual não precisa API
+
+      apiFetch('http://localhost:3005/api/users/theme', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ theme })
+      }).then(() => {
+        const updatedUser = { ...user, theme };
+        setUser(updatedUser);
+        localStorage.setItem('user', JSON.stringify(updatedUser));
+      }).catch(err => console.error('Error saving theme', err));
+    }
+  }, [theme]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setToken(null);
+    setUser(null);
+  };
+
+  useEffect(() => {
+    if (window.location.pathname === '/logout') {
+      handleLogout();
+      window.history.replaceState({}, '', '/');
+    }
+  }, []);
+
+  // Custom fetch wrapper para injetar o token e tratar expirações (401/403)
+  const apiFetch = async (url: string, options: RequestInit = {}) => {
+    const currentToken = localStorage.getItem('token');
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        ...(currentToken ? { 'Authorization': `Bearer ${currentToken}` } : {})
+      }
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      handleLogout();
+      throw new Error('Sessão expirada. Por favor, faça login novamente.');
+    }
+
+    return response;
+  };
 
   const addNotification = (notif: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
     const newNotif: Notification = {
@@ -117,15 +178,20 @@ function App() {
   const [searchEmptyCampaign, setSearchEmptyCampaign] = useState(false);
 
   useEffect(() => {
+    if (!token) return; // Prevent fetching while not authenticated
+
     const fetchData = async () => {
       try {
-        const tagsResponse = await fetch('http://localhost:3005/api/tags');
+        const tagsResponse = await apiFetch('http://localhost:3005/api/tags');
+        if (!tagsResponse.ok) {
+          throw new Error('Falha de autorização ou erro no servidor ao buscar tags.');
+        }
         const tagsData: Tag[] = await tagsResponse.json();
-        setTags(tagsData);
-
-        // const sectorsResponse = await fetch('http://localhost:3005/api/sectors');
-        // const sectorsData: Sector[] = await sectorsResponse.json();
-        // setSectors(sectorsData);
+        if (Array.isArray(tagsData)) {
+          setTags(tagsData);
+        } else if ((tagsData as any).results && Array.isArray((tagsData as any).results)) {
+          setTags((tagsData as any).results);
+        }
       } catch (error) {
         setError('Falha ao buscar dados do servidor. Verifique se o servidor está rodando.');
         console.error('Error fetching data:', error);
@@ -133,7 +199,7 @@ function App() {
     };
 
     fetchData();
-  }, []);
+  }, [token]);
 
   // Efeito para buscar listas quando o quadro mudar
   /*
@@ -216,7 +282,7 @@ function App() {
 
     if (source) params.append('source', source); if (selectedTags.length > 0) params.append('tags', selectedTags.join(','));
 
-    const response = await fetch(`${baseUrl}?${params.toString()}`);
+    const response = await apiFetch(`${baseUrl}?${params.toString()}`);
     if (!response.ok) {
       const errorData = await response.json();
       throw new Error(errorData.message || 'Falha na busca por cartões.');
@@ -339,7 +405,7 @@ ${normalizedMessage}
       if (source) params.append('source', source);
       if (selectedTags.length > 0) params.append('tags', selectedTags.join(','));
 
-      const response = await fetch(`${baseUrl}?${params.toString()}`);
+      const response = await apiFetch(`${baseUrl}?${params.toString()}`);
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || 'Falha ao gerar resumo da campanha.');
@@ -363,7 +429,7 @@ ${normalizedMessage}
     setSuccessMessage(null);
 
     try {
-      const response = await fetch('http://localhost:3005/api/campaign-summary/refresh', {
+      const response = await apiFetch('http://localhost:3005/api/campaign-summary/refresh', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -420,7 +486,7 @@ ${normalizedMessage}
       for (const campaign of campaignsData) {
         try {
           // Usamos a função de refresh existente para cada campanha
-          const response = await fetch('http://localhost:3005/api/campaign-summary/refresh', {
+          const response = await apiFetch('http://localhost:3005/api/campaign-summary/refresh', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -535,6 +601,33 @@ ${normalizedMessage}
 
 
 
+  if (!token || !user) {
+    return (
+      <Login onLogin={(newToken, newUser) => {
+        localStorage.setItem('token', newToken);
+        localStorage.setItem('user', JSON.stringify(newUser));
+        setToken(newToken);
+        setUser(newUser);
+        if (newUser.theme) setTheme(newUser.theme as "light" | "dark" | "system");
+      }} />
+    );
+  }
+
+  if (user.force_password_change) {
+    return (
+      <ChangePassword
+        token={token}
+        onSuccess={(newToken, updatedUser) => {
+          localStorage.setItem('token', newToken);
+          localStorage.setItem('user', JSON.stringify(updatedUser));
+          setToken(newToken);
+          setUser(updatedUser);
+          if (updatedUser.theme) setTheme(updatedUser.theme as "light" | "dark" | "system");
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex min-h-screen bg-background text-foreground">
       <Sidebar
@@ -542,6 +635,8 @@ ${normalizedMessage}
         setActiveTab={setActiveTab}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
+        user={user}
+        onLogout={handleLogout}
       />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -551,6 +646,17 @@ ${normalizedMessage}
               onMenuClick={() => setIsSidebarOpen(true)}
               notifications={notifications}
               setNotifications={setNotifications}
+              user={user}
+              onLogout={handleLogout}
+            />
+          ) : activeTab === 'settings' ? (
+            <Settings
+              token={token}
+              onMenuClick={() => setIsSidebarOpen(true)}
+              notifications={notifications}
+              setNotifications={setNotifications}
+              user={user}
+              onLogout={handleLogout}
             />
           ) : (
             <div className="container mx-auto p-4 md:p-8 space-y-8">
@@ -559,6 +665,8 @@ ${normalizedMessage}
                 onMenuClick={() => setIsSidebarOpen(true)}
                 notifications={notifications}
                 setNotifications={setNotifications}
+                user={user}
+                onLogout={handleLogout}
               />
 
               <Card>

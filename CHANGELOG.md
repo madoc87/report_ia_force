@@ -371,3 +371,45 @@ Após esses passos, todo o seu código (backend e frontend) estará no repositó
     - Desassociação e generalização sistêmica: Arquivos como `.env` e todo o teor referencial do `README.md` raiz, antes estritamente fixados com nomes relativos à conta *Hablla*, foram transpostos e renomeados a adotarem nomes lógicos da aplicação genéricos (`WORKSPACE_ID`). 
     - O `README.md` global foi completamente formatado removendo longos JSONs crús do manual e ajustando queries de exemplos.
 - **Base de Dados Fictícia:** Nova campanha incorporada listada em `src/lib/campaigns.ts` como "HB NÃO ATENDE JAN 2026.01".
+
+## 23. Autenticação e Gestão de Usuários (27/02/2026)
+
+- **Sistema de Login e Sessão:**
+    - Substituída a lógica isolada por um sistema de Single Page Application unificado com Login requerindo E-mail e Senha (`frontend/src/components/login.tsx`).
+    - Integração de Tokens JWT armazenados em cache local (`localStorage`) que persistem o estado e enviam em headers de autorização (`apiFetch`).
+    - Implementação da Rota de Fuga de Segurança (`/logout`) no `App.tsx` que permite deslogar e limpar memória instantaneamente acessando via URL.
+- **Backend com Banco de Dados e Criptografia:**
+    - Inicialização automática do banco SQLite com a nova entidade `users` (`backend/index.js`).
+    - Senhas agora são embaralhadas irreversivelmente (hashing de 10 rounds) via biblioteca `bcryptjs`.
+    - Geração automática de usuário master "Admin" nas credenciais padrão em casos de inicialização pura de servidor (`admin@mf.com`).
+- **Níveis de Acesso e Gerenciamento:**
+    - Novo componente e painel `/settings` (`frontend/src/components/settings.tsx`) restrito ao `role: admin`.
+    - No painel, administradores podem ver quem está cadastrado na Tabela, Cadastrar novos operadores, Deletá-los e forçar "Resets Manuais" de senhas provisórias com apenas um clique.
+- **Segurança de Acesso Obrigatória (Troca Forçada):**
+    - Novos usuários ou contas que sofreram Resets via painel de Admin recebem do backend a flag `force_password_change` acionada de forma compulsória.
+    - O frontend força interrupção absoluta de visualização com tela isolada (`ChangePassword.tsx`), impedindo navegação para o Dashboard ou Relatórios até que o usuário providencie e confirme uma nova senha privada definitiva.
+
+## 24. Correções Estruturais e de Interface (27/02/2026)
+
+- **Correção da Cascata de Overlays (DOM Locking):**
+    - Implementado um gancho de limpeza (`document.body.style.pointerEvents = ''`) nos componentes `Login` e `ChangePassword` para desarmar a trava residual invisível (`pointer-events: none`) advinda da biblioteca externa Radix UI.
+    - Eliminado permanentemente o travamento obscuro que inutilizava cursores e impediam redirecionamentos bruscos durante quebras de autenticação na página vazia.
+- **Hierarquia de Requisições das APIs:**
+    - Prevenção de conflito de HTTP Status (HTTP 401 Unauthorized) em background nas checagens paralelas do `App.tsx`: requisições avulsas de estatísticas e listagem de `tags` agora são estritamente suspensas até que o Token seja devidamente atestado e inserido pelo hook unificado.
+- **Contexto de Perfil Compartilhado Transparente:**
+    - Corrigido problema de reatividade onde a View interna de Dashboard não acessava os metadados do login primário.
+    - Injetada a representação fiel de dados logados (Nome e Email da constante principal associados) preenchendo saudações dinâmicas e as representações alfabéticas (Avatares) dentro nos elementos `<Header />` da plataforma.
+- **Detecção de Expiração e Auto-Logout:**
+    - Adicionado interceptador explícito para respostas de erro `HTTP 401 Unauthorized` e `HTTP 403 Forbidden` nos núcleos de requisição (`apiFetch`, Componente `Dashboard` e aba `Settings`).
+    - Assim que um Token perde a validade natural, o sistema agora aborta falhas sucessivas de tela, expurgando instantaneamente o LocalStorage e redirecionando a sessão do usuário de volta e de forma forçada para a tela de Acesso (`/logout`).
+
+## 25. Tema Persistente por Usuário (03/03/2026)
+
+- **Armazenamento de Preferências no Banco de Dados:**
+    - Adicionada a coluna `theme` na tabela `users` do SQLite para salvar as escolhas individuais de interface (Dark/Light Mode).
+    - Criada a rota `PUT /api/users/theme` responsável por escutar alterações de visualização de cada sessão e arquivar a preferência ativamente no backend.
+- **Login Adaptativo:**
+    - O container base de Login agora obedece cores dinâmicas e tokens gerais nativos do Sistema de Cores (permitindo que suporte tanto o formato Dark, como o Light).
+    - Injetado no topo do modal de Entrada o botão de Toggle de Tema (Dark/Light). Caso o usuário seja novo, o seu navegador lerá a preferência do sistema operacional por padrão (através do localStorage `vite-ui-theme`). Se não houver preferência local, o Dark mode segue como default.
+- **Injeção Silenciosa na Sessão Pós-Login:**
+    - Ao confirmar credenciais como sucesso na tela de Login ou Reset de Senha, o frontend resgata a opção salva contida no "Payload" da API e força a sincronização da aba pra carregar instantaneamente o último tema do Operador logado, sobrepondo o modo atual da tela de acesso se eles diferirem.

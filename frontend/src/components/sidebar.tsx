@@ -7,9 +7,11 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   isOpen?: boolean;
   onClose?: () => void;
+  user?: any;
+  onLogout?: () => void;
 }
 
-export function Sidebar({ activeTab, setActiveTab, isOpen, onClose }: SidebarProps) {
+export function Sidebar({ activeTab, setActiveTab, isOpen, onClose, user, onLogout }: SidebarProps) {
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, enabled: true },
     { id: 'relatorios', label: 'Relatórios', icon: FileText, enabled: true },
@@ -17,7 +19,7 @@ export function Sidebar({ activeTab, setActiveTab, isOpen, onClose }: SidebarPro
     { id: 'produtos', label: 'Produtos', icon: Package, enabled: false },
     { id: 'clientes', label: 'Clientes', icon: Users, enabled: false },
     { id: 'analises', label: 'Análises', icon: BarChart3, enabled: false },
-    { id: 'configuracoes', label: 'Configurações', icon: Settings, enabled: false },
+    { id: 'settings', label: 'Configurações', icon: Settings, enabled: user?.role === 'admin' },
   ];
 
   return (
@@ -67,14 +69,17 @@ export function Sidebar({ activeTab, setActiveTab, isOpen, onClose }: SidebarPro
             </button>
           ))}
         </nav>
-        <div className="p-4 mt-auto border-t border-border">
-          <button className="flex justify-between items-center w-full px-4 py-3 text-muted-foreground hover:text-foreground transition-colors">
-            <div className='flex gap-3 items-center'>
-              <LogOut className="w-5 h-5" />
-              <span className="font-medium">Sair</span>
-            </div>
-            <ModeToggle />
+        <div className="p-4 mt-auto border-t border-border flex justify-between items-center">
+          <button
+            onClick={onLogout}
+            className="flex gap-3 items-center text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <LogOut className="w-5 h-5" />
+            <span className="font-medium">Sair</span>
           </button>
+          <div className="shrink-0 relative z-50">
+            <ModeToggle />
+          </div>
         </div>
       </div>
     </>

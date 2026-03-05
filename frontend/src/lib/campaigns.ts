@@ -25,4 +25,8 @@ export const campaignsData: CampaignOption[] = [
   { name: "HB ANIV NÃO ATENDE SET 2025.02", date: "12/02/2026 13:33", month: "D05-Fev" },
   { name: "HB ANIV NÃO ATENDE SET 2025.03", date: "19/02/2026 09:51", month: "D06-Fev" },
   { name: "HB NÃO ATENDE JAN 2026.01", date: "24/02/2026 09:17", month: "D07-Fev" },
+  { name: "HB ANIV 9MESES MAR 2026.01", date: "26/02/2026 10:14", month: "D08-Fev" },
+  { name: "HB ANIV 9MESES MAR 2026.02", date: "27/02/2026 09:46", month: "D09-Fev" },
+  { name: "HB ANIV 9MESES MAR 2026.03", date: "02/03/2026 10:19", month: "D01-Mar" },
+  { name: "HB ANIV 9MESES MAR 2026.04", date: "03/03/2026 15:14", month: "D02-Mar" },
 ];

@@ -13,7 +13,8 @@ import {
 import { campaignsData } from '@/lib/campaigns';
 import { Notification } from '@/App';
 import { Header } from '@/components/header';
-import { ArrowDownRight } from 'lucide-react';
+import { ArrowDownRight, Bot, PieChart as PieChartIcon } from 'lucide-react';
+import { MultiSelectCampaign } from '@/components/ui/multi-select-campaign';
 
 interface CampaignData {
   id: number;
@@ -39,6 +40,8 @@ interface DashboardProps {
   onMenuClick?: () => void;
   notifications: Notification[];
   setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
+  user?: any;
+  onLogout?: () => void;
 }
 
 const monthOrder: Record<string, number> = {
@@ -46,18 +49,31 @@ const monthOrder: Record<string, number> = {
   'Jul': 7, 'Ago': 8, 'Set': 9, 'Out': 10, 'Nov': 11, 'Dez': 12
 };
 
-export function Dashboard({ onMenuClick, notifications, setNotifications }: DashboardProps) {
+export function Dashboard({ onMenuClick, notifications, setNotifications, user, onLogout }: DashboardProps) {
   const [data, setData] = useState<any[]>([]);
   const [filteredData, setFilteredData] = useState<any[]>([]);
-  const [filterMode, setFilterMode] = useState<'month' | 'grouped' | 'individual'>('individual');
+  const [filterMode, setFilterMode] = useState<'month' | 'grouped' | 'month_shots' | 'individual'>('month_shots');
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
   const [selectedSubMonth, setSelectedSubMonth] = useState<string>('all');
+  const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        const response = await fetch('http://localhost:3005/api/dashboard-data');
+        const token = localStorage.getItem('token');
+        const response = await fetch('http://localhost:3005/api/dashboard-data', {
+          headers: {
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          }
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          onLogout?.();
+          throw new Error('Sessão expirada. Por favor, faça login novamente.');
+        }
+
+        if (!response.ok) throw new Error('Failed to fetch dashboard data');
         const json = await response.json();
 
         const processed = json.map((item: CampaignData) => {
@@ -126,9 +142,13 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
       if (selectedMonth !== 'all') {
         result = result.filter(d => d.monthName === selectedMonth);
       }
-    } else if (filterMode === 'individual') {
+    } else if (filterMode === 'month_shots') {
       if (selectedSubMonth !== 'all') {
         result = result.filter(d => d.monthName === selectedSubMonth);
+      }
+    } else if (filterMode === 'individual') {
+      if (selectedCampaigns.length > 0) {
+        result = result.filter(d => selectedCampaigns.includes(d.name));
       }
     } else if (filterMode === 'grouped') {
       // Agrupar por groupedName mantendo a ordem da primeira ocorrência
@@ -170,7 +190,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
     }
 
     setFilteredData(result);
-  }, [filterMode, selectedMonth, selectedSubMonth, data]);
+  }, [filterMode, selectedMonth, selectedSubMonth, selectedCampaigns, data]);
 
   const totals = filteredData.reduce((acc, curr) => ({
     revenue: acc.revenue + curr.revenue,
@@ -184,9 +204,28 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
   let activeMonth = 'all';
   if (filterMode === 'month') {
     activeMonth = selectedMonth;
-  } else if (filterMode === 'individual') {
+  } else if (filterMode === 'month_shots') {
     activeMonth = selectedSubMonth;
   }
+
+  const calcAverage = (key: string, isStringPercent = false) => {
+    if (filteredData.length === 0) return 0;
+    const sum = filteredData.reduce((acc, curr) => {
+      let val = 0;
+      if (isStringPercent) {
+        val = parseFloat(curr[key]) || 0;
+      } else {
+        val = curr[key] || 0;
+      }
+      return acc + val;
+    }, 0);
+    return sum / filteredData.length;
+  };
+
+  const avgConvVendas = calcAverage('conversionSalesClients', true);
+  const avgConvIA = calcAverage('conversionSalesResponses', true);
+  const avgSales = calcAverage('totalSales');
+  const avgRevenue = calcAverage('revenue');
 
   let trends: { revenue: string | null; sales: string | null; ticket: string | null; clients: string | null } = {
     revenue: null,
@@ -236,6 +275,8 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
         onMenuClick={onMenuClick}
         notifications={notifications}
         setNotifications={setNotifications}
+        user={user}
+        onLogout={onLogout}
       />
 
       {/* Filters */}
@@ -243,10 +284,11 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
         <div className="flex-1">
           <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Modo de Filtro</label>
           <Select value={filterMode} onValueChange={(v: any) => setFilterMode(v)}>
-            <SelectTrigger className="bg-card border-none shadow-sm">
+            <SelectTrigger className="bg-card border-none shadow-sm h-10">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="month_shots">Por Mês de Disparo</SelectItem>
               <SelectItem value="individual">Campanhas Individuais</SelectItem>
               <SelectItem value="grouped">Campanhas Agrupadas</SelectItem>
               <SelectItem value="month">Por Mês</SelectItem>
@@ -258,7 +300,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
           <div className="flex-1">
             <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Mês</label>
             <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-              <SelectTrigger className="bg-card border-none shadow-sm">
+              <SelectTrigger className="bg-card border-none shadow-sm h-10">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -269,11 +311,11 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
           </div>
         )}
 
-        {filterMode === 'individual' && (
+        {filterMode === 'month_shots' && (
           <div className="flex-1">
             <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Mês das Campanhas</label>
             <Select value={selectedSubMonth} onValueChange={setSelectedSubMonth}>
-              <SelectTrigger className="bg-card border-none shadow-sm">
+              <SelectTrigger className="bg-card border-none shadow-sm h-10">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -283,19 +325,30 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
             </Select>
           </div>
         )}
+
+        {filterMode === 'individual' && (
+          <div className="flex-[3]">
+            <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Campanhas Individuais</label>
+            <MultiSelectCampaign
+              options={campaignsData}
+              selected={selectedCampaigns}
+              onChange={setSelectedCampaigns}
+            />
+          </div>
+        )}
       </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <StatsCard
-          title="Vendas Totais"
+          title="Valor Vendido"
           value={totals.revenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           trend={trends.revenue}
           icon={<DollarSign className="w-5 h-5 text-emerald-500" />}
           color="bg-emerald-500/10"
         />
         <StatsCard
-          title="Total de Vendas"
+          title="Número de Vendas"
           value={totals.sales.toString()}
           trend={trends.sales}
           icon={<ShoppingCart className="w-5 h-5 text-indigo-500" />}
@@ -309,7 +362,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
           color="bg-blue-500/10"
         />
         <StatsCard
-          title="Clientes"
+          title="Número de Clientes"
           value={totals.clients.toString()}
           trend={trends.clients}
           icon={<Users className="w-5 h-5 text-orange-500" />}
@@ -397,6 +450,39 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
         </Card>
       </div>
 
+      {/* Average Stats Cards */}
+      <h3 className="text-lg font-bold mb-4">Médias das Campanhas Filtradas</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <StatsCard
+          title="Média Conv. Vendas"
+          value={`${avgConvVendas.toFixed(2)}%`}
+          icon={<PieChartIcon className="w-5 h-5 text-purple-500" />}
+          color="bg-purple-500/10"
+          noTrend
+        />
+        <StatsCard
+          title="Média Conv. IA"
+          value={`${avgConvIA.toFixed(2)}%`}
+          icon={<Bot className="w-5 h-5 text-emerald-500" />}
+          color="bg-emerald-500/10"
+          noTrend
+        />
+        <StatsCard
+          title="Média de Vendas"
+          value={avgSales.toFixed(2)}
+          icon={<ShoppingCart className="w-5 h-5 text-indigo-500" />}
+          color="bg-indigo-500/10"
+          noTrend
+        />
+        <StatsCard
+          title="Média de Faturamento"
+          value={avgRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          icon={<DollarSign className="w-5 h-5 text-emerald-500" />}
+          color="bg-emerald-500/10"
+          noTrend
+        />
+      </div>
+
       {/* Recent Campaigns Table */}
       <Card className="border-none shadow-sm">
         <CardHeader>
@@ -408,7 +494,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
               <thead className="text-xs text-zinc-400 uppercase border-b border-zinc-100">
                 <tr>
                   <th className="px-4 py-3 font-medium">Campanha</th>
-                  <th className="px-4 py-3 font-medium text-center">Mes/Disparo</th>
+                  <th className="px-4 py-3 font-medium text-center">Disparo/Mes</th>
                   <th className="px-4 py-3 font-medium text-center">Clientes</th>
                   <th className="px-4 py-3 font-medium text-center">IA</th>
                   <th className="px-4 py-3 font-medium text-center">Manual</th>
@@ -445,7 +531,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications }: Dash
   );
 }
 
-function StatsCard({ title, value, trend, icon, color }: any) {
+function StatsCard({ title, value, trend, icon, color, noTrend }: any) {
   const isNegative = trend && trend.startsWith('-');
 
   return (
@@ -455,7 +541,7 @@ function StatsCard({ title, value, trend, icon, color }: any) {
           <div className={cn("p-2 rounded-lg", color)}>
             {icon}
           </div>
-          {trend && (
+          {!noTrend && trend && (
             <span className={cn("text-xs font-bold flex items-center", isNegative ? "text-red-500" : "text-emerald-500")}>
               {isNegative ? <ArrowDownRight className="w-3 h-3 mr-1" /> : <ArrowUpRight className="w-3 h-3 mr-1" />}
               {trend}
@@ -465,10 +551,12 @@ function StatsCard({ title, value, trend, icon, color }: any) {
         <div>
           <p className="text-sm text-muted-foreground font-medium mb-1">{title}</p>
           <h3 className="text-2xl font-bold">{value}</h3>
-          {trend ? (
-            <p className="text-xs text-muted-foreground mt-1">vs. mês anterior</p>
-          ) : (
-            <p className="text-xs text-muted-foreground italic mt-1">no período</p>
+          {!noTrend && (
+            trend ? (
+              <p className="text-xs text-muted-foreground mt-1">vs. mês anterior</p>
+            ) : (
+              <p className="text-xs text-muted-foreground italic mt-1">no período</p>
+            )
           )}
         </div>
       </CardContent>
