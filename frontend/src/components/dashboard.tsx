@@ -98,6 +98,20 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
           // Nome agrupado (removendo .01, .02, etc)
           const groupedName = item.campaign_name.replace(/\.\d+$/, '').trim();
 
+          let parsedTotalCost = 0;
+          if (typeof item.total_cost === 'number') {
+            parsedTotalCost = item.total_cost;
+          } else if (typeof item.total_cost === 'string') {
+            const c = item.total_cost.replace('R$', '').trim();
+            if (c.includes(',') && c.includes('.')) {
+               parsedTotalCost = parseFloat(c.replace(/\./g, '').replace(',', '.'));
+            } else if (c.includes(',')) {
+               parsedTotalCost = parseFloat(c.replace(',', '.'));
+            } else {
+               parsedTotalCost = parseFloat(c);
+            }
+          }
+
           return {
             id: item.id,
             name: item.campaign_name,
@@ -113,6 +127,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
             responses: item.total_hablla_responses || 0,
             conversionSalesClients: item.conversion_sales_clients || "0",
             conversionSalesResponses: item.conversion_sales_responses || "0",
+            totalCost: parsedTotalCost || 0,
             date: item.date_range
           };
         }).filter(Boolean);
@@ -165,6 +180,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
           groups[item.groupedName].revenue = 0;
           groups[item.groupedName].clients = 0;
           groups[item.groupedName].responses = 0;
+          groups[item.groupedName].totalCost = 0;
           orderedGroups.push(groups[item.groupedName]);
         }
         groups[item.groupedName].salesIA += item.salesIA;
@@ -173,6 +189,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
         groups[item.groupedName].revenue += item.revenue;
         groups[item.groupedName].clients += item.clients;
         groups[item.groupedName].responses += item.responses;
+        groups[item.groupedName].totalCost += item.totalCost;
         groups[item.groupedName].count += 1;
       });
 
@@ -197,8 +214,9 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     revenue: acc.revenue + curr.revenue,
     sales: acc.sales + curr.totalSales,
     clients: acc.clients + curr.clients,
-    responses: acc.responses + curr.responses
-  }), { revenue: 0, sales: 0, clients: 0, responses: 0 });
+    responses: acc.responses + curr.responses,
+    cost: acc.cost + (curr.totalCost || 0)
+  }), { revenue: 0, sales: 0, clients: 0, responses: 0, cost: 0 });
 
   const availableMonths = [...new Set(data.map(d => d.monthName))].sort((a, b) => monthOrder[a] - monthOrder[b]);
 
@@ -227,12 +245,14 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
   const avgConvIA = calcAverage('conversionSalesResponses', true);
   const avgSales = calcAverage('totalSales');
   const avgRevenue = calcAverage('revenue');
+  const avgCost = calcAverage('totalCost');
 
-  let trends: { revenue: string | null; sales: string | null; ticket: string | null; clients: string | null } = {
+  let trends: { revenue: string | null; sales: string | null; ticket: string | null; clients: string | null; cost: string | null } = {
     revenue: null,
     sales: null,
     ticket: null,
-    clients: null
+    clients: null,
+    cost: null
   };
 
   if (activeMonth !== 'all') {
@@ -244,8 +264,9 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
         revenue: acc.revenue + curr.revenue,
         sales: acc.sales + curr.totalSales,
         clients: acc.clients + curr.clients,
-        responses: acc.responses + curr.responses
-      }), { revenue: 0, sales: 0, clients: 0, responses: 0 });
+        responses: acc.responses + curr.responses,
+        cost: acc.cost + (curr.totalCost || 0)
+      }), { revenue: 0, sales: 0, clients: 0, responses: 0, cost: 0 });
 
       const prevTicket = prevTotals.sales > 0 ? prevTotals.revenue / prevTotals.sales : 0;
       const currentTicket = totals.sales > 0 ? totals.revenue / totals.sales : 0;
@@ -261,7 +282,8 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
         revenue: calcTrend(totals.revenue, prevTotals.revenue),
         sales: calcTrend(totals.sales, prevTotals.sales),
         ticket: calcTrend(currentTicket, prevTicket),
-        clients: calcTrend(totals.clients, prevTotals.clients)
+        clients: calcTrend(totals.clients, prevTotals.clients),
+        cost: calcTrend(totals.cost, prevTotals.cost)
       };
     }
   }
@@ -340,7 +362,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
         <StatsCard
           title="Valor Vendido"
           value={totals.revenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -368,6 +390,13 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
           trend={trends.clients}
           icon={<Users className="w-5 h-5 text-orange-500" />}
           color="bg-orange-500/10"
+        />
+        <StatsCard
+          title="Custo Total"
+          value={totals.cost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          trend={trends.cost}
+          icon={<DollarSign className="w-5 h-5 text-red-500" />}
+          color="bg-red-500/10"
         />
       </div>
 
@@ -453,7 +482,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
 
       {/* Average Stats Cards */}
       <h3 className="text-lg font-bold mb-4">Médias das Campanhas Filtradas</h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
         <StatsCard
           title="Média Conv. Vendas"
           value={`${avgConvVendas.toFixed(2)}%`}
@@ -480,6 +509,13 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
           value={avgRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           icon={<DollarSign className="w-5 h-5 text-emerald-500" />}
           color="bg-emerald-500/10"
+          noTrend
+        />
+        <StatsCard
+          title="Média de Custos"
+          value={avgCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          icon={<DollarSign className="w-5 h-5 text-red-500" />}
+          color="bg-red-500/10"
           noTrend
         />
       </div>
@@ -583,8 +619,11 @@ const CustomTooltip = ({ active, payload, label }: any) => {
         <p className="mb-1 text-indigo-400/80">
           Conversão Vendas: <span className="font-medium text-white">{convVendas}%</span>
         </p>
-        <p className="text-indigo-400/80">
+        <p className="mb-1 text-indigo-400/80">
           Conversão IA: <span className="font-medium text-white">{convIA}%</span>
+        </p>
+        <p className="text-indigo-400/80">
+          Custo: <span className="font-medium text-white">{data.totalCost ? data.totalCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'R$ 0,00'}</span>
         </p>
       </div>
     );
