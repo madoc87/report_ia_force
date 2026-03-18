@@ -413,3 +413,21 @@ Após esses passos, todo o seu código (backend e frontend) estará no repositó
     - Injetado no topo do modal de Entrada o botão de Toggle de Tema (Dark/Light). Caso o usuário seja novo, o seu navegador lerá a preferência do sistema operacional por padrão (através do localStorage `vite-ui-theme`). Se não houver preferência local, o Dark mode segue como default.
 - **Injeção Silenciosa na Sessão Pós-Login:**
     - Ao confirmar credenciais como sucesso na tela de Login ou Reset de Senha, o frontend resgata a opção salva contida no "Payload" da API e força a sincronização da aba pra carregar instantaneamente o último tema do Operador logado, sobrepondo o modo atual da tela de acesso se eles diferirem.
+
+## 26. Melhorias Avançadas na Gestão de Campanhas (18/03/2026)
+
+- **Painel de Gestão e Criação de Campanhas Dinâmico:**
+    - A origem dos dados de campanhas (`campaignsData`), antes estática em arquivo, foi inteiramente migrada para o banco de dados via SQLite, com suporte nativo a operações CRUD (`frontend/src/components/settings.tsx`).
+    - Adicionado suporte a "Mês Referência", "Nº da Campanha" (preenchimento automático detectando o total existente no mês correspondente) e adoção sistêmica por extenso dos Meses na interface (ex: 'Jan' transformado dinamicamente para 'Janeiro').
+- **Interface e Usabilidade Aprimoradas (UX Avançada):**
+    - A tabela de gerenciamento ganhou altura máxima parametrizada, contando suporte interno a barras de rolagem _(ScrollArea)_ e barra indicadora fixa estática de categorias unida a paginação de registros a cada 8 itens, trazendo alta resiliência e velocidade visual.
+    - A ordem de retorno dos elementos armazenados sofreu uma inversão (recém criadas aparecendo em primeiro plano - `ORDER BY id DESC`) garantindo que as campanhas do ano vigentes sempre pujem perante anos obsoletos.
+    - Desenvolvida poderosa barra de pesquisa reativa que re-calcula e ajusta as paginações em milissegundos dependendo se o título confere semântica em Nome, Mês ou Textos customizados como "não enviada".
+- **Validações, Autoformatações e Datas:**
+    - O formulário central ganhou interceptadores rigorosos nos front e backend. Tentativas manuais rudimentares em caixas de "Hora" (ex: "0903") são auto detectadas e traduzidas (`09:03`), e em contra-ponto, espaços vãos ou datas insanas quebram e disparam os visuais uníssonos de API via Erro 400 Bad Request.
+    - Integrado o `DatePicker` oficial já empregado em relatórios atuando com inteligência. Tanto ele quanto o Mês de Referência recebem o mês e os dias pré-configurados (Hovering "Hoje" ou atrelando na exibição de dados atuais `new Date().getMonth()`).
+    - Construída a função "Editável" acionada via botões PencilLine. As mesmas recarregam as linhas selecionadas na prancheta interativa central transformando a estrutura original de POST em submissões diretas ao backend por formato PUT.
+- **Tooltips, Reestruturação Grid e Flags (Campanhas Pendentes/Checkbox):**
+    - Injeção das Dicas Visuais ativas pelo container global de balões (`TooltipProvider` aliado às diretivas de informação `Info` na Library das Labels), clarificando funções vitais de metadados das tags preenchidas (explicando os motivos de exigência de IDs e caixas automáticas).
+    - O ecossistema construtor foi matematicamente recodificado num sistema mais fino (grid de 12 repetições ativas espalhadas `md:grid-cols-12`) permitindo alocamento denso e plano de múltiplos campos sem precisar ocupar fileiras verticais desnecessárias.
+    - Acrescentada a verificação visual por caixas (Checkbox: "Campanha não enviada"). A ação trava ativamente com esmaecimentos de interações caixas obsoletas da data ou horário do sistema. A campanha sobe de forma limpa como string morta (`""`) ao invés do clássico *NaN/Undefined/Default*, acendendo visuais italianos cinzentos contendo textos "Campanha não enviada" nas listagens que também reagem brilhantemente a pesquisas do novo buscador interno sem comprometer filtros do Dashboard.

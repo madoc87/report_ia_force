@@ -20,7 +20,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Sidebar } from '@/components/sidebar';
 import { Dashboard } from '@/components/dashboard';
 import { Header } from '@/components/header';
-import { campaignsData } from '@/lib/campaigns';
+import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Login } from '@/components/login';
 import { ChangePassword } from '@/components/change-password';
 import { Settings } from '@/components/settings';
@@ -94,6 +94,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingDots, setLoadingDots] = useState('');
+  const [campaignsData, setCampaignsData] = useState<CampaignOption[]>([]);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('relatorios');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -191,6 +192,12 @@ function App() {
           setTags(tagsData);
         } else if ((tagsData as any).results && Array.isArray((tagsData as any).results)) {
           setTags((tagsData as any).results);
+        }
+
+        const campaignsResponse = await apiFetch('http://localhost:3005/api/campaigns');
+        if (campaignsResponse.ok) {
+          const campaignsDataJson = await campaignsResponse.json();
+          setCampaignsData(campaignsDataJson);
         }
       } catch (error) {
         setError('Falha ao buscar dados do servidor. Verifique se o servidor está rodando.');
@@ -648,6 +655,7 @@ ${normalizedMessage}
               setNotifications={setNotifications}
               user={user}
               onLogout={handleLogout}
+              campaignsData={campaignsData}
             />
           ) : activeTab === 'settings' ? (
             <Settings
@@ -657,6 +665,12 @@ ${normalizedMessage}
               setNotifications={setNotifications}
               user={user}
               onLogout={handleLogout}
+              campaignsData={campaignsData}
+              fetchCampaigns={() => {
+                apiFetch('http://localhost:3005/api/campaigns')
+                  .then(res => res.json())
+                  .then(data => setCampaignsData(data));
+              }}
             />
           ) : (
             <div className="container mx-auto p-4 md:p-8 space-y-8">

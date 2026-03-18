@@ -16,8 +16,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Badge } from "@/components/ui/badge";
 
 export type CampaignOption = {
+  id?: number;
   name: string;
   date: string;
+  date_only?: string;
+  time_only?: string;
+  reference_month?: string;
+  number?: number;
   month: string;
 };
 

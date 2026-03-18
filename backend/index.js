@@ -127,6 +127,18 @@ let db;
       await db.exec(`ALTER TABLE users ADD COLUMN theme TEXT DEFAULT 'dark'`);
     } catch (err) { }
 
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        date TEXT,
+        time TEXT,
+        reference_month TEXT,
+        number INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // User generation or recovery mechanism via .env
     if (ADMIN_EMAIL && ADMIN_PASSWORD) {
       const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
@@ -158,6 +170,17 @@ let db;
     }
 
     console.log('SQLite database initialized.');
+
+    // Start server after DB initialization
+    const server = app.listen(port, () => {
+      console.log(`Servidor rodando na porta ${port}`);
+    });
+
+    server.on('error', (err) => {
+      console.error('Erro no servidor express:', err);
+      process.exit(1);
+    });
+
   } catch (error) {
     console.error('Failed to initialize SQLite:', error);
   }
@@ -616,6 +639,94 @@ app.post('/api/campaign-summary/refresh', authenticateToken, async (req, res) =>
   }
 });
 
+// --- Campaigns Administration Endpoints ---
+
+app.get('/api/campaigns', authenticateToken, async (req, res) => {
+  try {
+    const campaigns = await db.all('SELECT * FROM campaigns ORDER BY id DESC');
+    // Mapear para o formato esperado pelo frontend (se for compativel com CampaignOption)
+    const formattedCampaigns = campaigns.map(c => {
+      const numStr = c.number < 10 ? `0${c.number}` : `${c.number}`;
+      return {
+        id: c.id,
+        name: c.name,
+        date: `${c.date} ${c.time}`,
+        date_only: c.date,
+        time_only: c.time,
+        reference_month: c.reference_month,
+        number: c.number,
+        month: `D${numStr}-${c.reference_month.substring(0, 3)}` // ex: D01-Jan
+      };
+    });
+    res.status(200).json(formattedCampaigns);
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao buscar campanhas', error: error.message });
+  }
+});
+
+app.post('/api/campaigns', authenticateToken, authorizeAdmin, async (req, res) => {
+  let { name, date, time, reference_month, number } = req.body;
+  if (!name || !name.trim() || !reference_month) {
+    return res.status(400).json({ message: 'O nome e o mês de referência são obrigatórios.' });
+  }
+
+  if (time && time.trim()) {
+    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+    if (!timeRegex.test(time)) {
+      return res.status(400).json({ message: 'Formato de hora inválido (esperado HH:MM).' });
+    }
+  }
+
+  try {
+    if (!number) {
+      const result = await db.get('SELECT COUNT(*) as count FROM campaigns WHERE reference_month = ?', [reference_month]);
+      number = result.count + 1;
+    }
+
+    const { lastID } = await db.run(
+      'INSERT INTO campaigns (name, date, time, reference_month, number) VALUES (?, ?, ?, ?, ?)',
+      [name, date, time, reference_month, number]
+    );
+
+    res.status(201).json({ message: 'Campanha criada com sucesso', id: lastID });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao criar campanha', error: error.message });
+  }
+});
+
+app.put('/api/campaigns/:id', authenticateToken, authorizeAdmin, async (req, res) => {
+  const { name, date, time, reference_month, number } = req.body;
+  if (!name || !name.trim() || !reference_month || !number) {
+    return res.status(400).json({ message: 'Todos os campos obrigatórios devem ser preenchidos.' });
+  }
+
+  if (time && time.trim()) {
+    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+    if (!timeRegex.test(time)) {
+      return res.status(400).json({ message: 'Formato de hora inválido (esperado HH:MM).' });
+    }
+  }
+
+  try {
+    await db.run(
+      'UPDATE campaigns SET name = ?, date = ?, time = ?, reference_month = ?, number = ? WHERE id = ?',
+      [name, date, time, reference_month, number, req.params.id]
+    );
+    res.status(200).json({ message: 'Campanha atualizada com sucesso.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao atualizar campanha', error: error.message });
+  }
+});
+
+app.delete('/api/campaigns/:id', authenticateToken, authorizeAdmin, async (req, res) => {
+  try {
+    await db.run('DELETE FROM campaigns WHERE id = ?', [req.params.id]);
+    res.status(200).json({ message: 'Campanha excluída com sucesso.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao excluir campanha', error: error.message });
+  }
+});
+
 // --- User Management Endpoints ---
 
 // Obter usuários (apenas Admin)
@@ -719,8 +830,4 @@ app.put('/api/users/theme', authenticateToken, async (req, res) => {
     console.error('Erro ao atualizar tema:', error);
     res.status(500).json({ message: 'Erro no servidor.', error: error.message });
   }
-});
-
-app.listen(port, () => {
-  console.log(`Servidor rodando na porta ${port}`);
 });

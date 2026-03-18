@@ -18,18 +18,20 @@ interface DatePickerProps {
   placeholder: string;
   date: Date | undefined;
   setDate: (date: Date | undefined) => void;
+  disabled?: boolean;
 }
 
-export function DatePicker({ placeholder, date, setDate }: DatePickerProps) {
+export function DatePicker({ placeholder, date, setDate, disabled = false }: DatePickerProps) {
   const [open, setOpen] = React.useState(false);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={(newOpen) => { if (!disabled) setOpen(newOpen); }}>
       <PopoverTrigger asChild>
         <div className="relative">
           <Button
             type="button"
             variant={'outline'}
+            disabled={disabled}
             className={cn(
               'pr-7 w-full justify-between text-left font-normal',
               !date && 'text-muted-foreground'

@@ -42,16 +42,16 @@
                 "focus": true
             }
         },
-        {
-            "label": "gem",
-            "type": "shell",
-            "command": "gemini",
-            "presentation": {
-                "panel": "dedicated",
-                "clear": true,
-                "focus": false
-            }
-        },
+        // {
+        //     "label": "gem",
+        //     "type": "shell",
+        //     "command": "gemini",
+        //     "presentation": {
+        //         "panel": "dedicated",
+        //         "clear": true,
+        //         "focus": false
+        //     }
+        // },
         {
             "label": "_start_all",
             "dependsOrder": "parallel",

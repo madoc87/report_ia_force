@@ -10,7 +10,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, AreaChart, Area
 } from 'recharts';
-import { campaignsData } from '@/lib/campaigns';
+import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Notification } from '@/App';
 import { Header } from '@/components/header';
 import { ArrowDownRight, Bot, PieChart as PieChartIcon } from 'lucide-react';
@@ -42,6 +42,7 @@ interface DashboardProps {
   setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
   user?: any;
   onLogout?: () => void;
+  campaignsData: CampaignOption[];
 }
 
 const monthOrder: Record<string, number> = {
@@ -49,7 +50,7 @@ const monthOrder: Record<string, number> = {
   'Jul': 7, 'Ago': 8, 'Set': 9, 'Out': 10, 'Nov': 11, 'Dez': 12
 };
 
-export function Dashboard({ onMenuClick, notifications, setNotifications, user, onLogout }: DashboardProps) {
+export function Dashboard({ onMenuClick, notifications, setNotifications, user, onLogout, campaignsData }: DashboardProps) {
   const [data, setData] = useState<any[]>([]);
   const [filteredData, setFilteredData] = useState<any[]>([]);
   const [filterMode, setFilterMode] = useState<'month' | 'grouped' | 'month_shots' | 'individual'>('month_shots');

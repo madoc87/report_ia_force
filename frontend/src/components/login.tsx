@@ -44,13 +44,20 @@ export function Login({ onLogin }: LoginProps) {
 
         try {
             const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3005';
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
             const response = await fetch(`${BASE_URL}/api/login`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ email, password }),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const errData = await response.json().catch(() => ({}));
@@ -60,7 +67,11 @@ export function Login({ onLogin }: LoginProps) {
             const data = await response.json();
             onLogin(data.token, data.user);
         } catch (err: any) {
-            setError(err.message || 'Erro ao fazer login.');
+            if (err.name === 'AbortError') {
+                setError('Aguardando resposta do servidor demorou muito. Verifique se o backend está rodando.');
+            } else {
+                setError(err.message || 'Erro ao fazer login.');
+            }
         } finally {
             setLoading(false);
         }
