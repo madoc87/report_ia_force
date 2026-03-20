@@ -431,3 +431,44 @@ Após esses passos, todo o seu código (backend e frontend) estará no repositó
     - Injeção das Dicas Visuais ativas pelo container global de balões (`TooltipProvider` aliado às diretivas de informação `Info` na Library das Labels), clarificando funções vitais de metadados das tags preenchidas (explicando os motivos de exigência de IDs e caixas automáticas).
     - O ecossistema construtor foi matematicamente recodificado num sistema mais fino (grid de 12 repetições ativas espalhadas `md:grid-cols-12`) permitindo alocamento denso e plano de múltiplos campos sem precisar ocupar fileiras verticais desnecessárias.
     - Acrescentada a verificação visual por caixas (Checkbox: "Campanha não enviada"). A ação trava ativamente com esmaecimentos de interações caixas obsoletas da data ou horário do sistema. A campanha sobe de forma limpa como string morta (`""`) ao invés do clássico *NaN/Undefined/Default*, acendendo visuais italianos cinzentos contendo textos "Campanha não enviada" nas listagens que também reagem brilhantemente a pesquisas do novo buscador interno sem comprometer filtros do Dashboard.
+
+## 27. Implementação de Segurança em Cabeçalhos HTTP (20/03/2026)
+
+- **Instalação do Middelware Helmet (`backend`):**
+    - Adicionada e instaurada via NPM a biblioteca oficial `Helmet` atuando como proteção central de escudos no Express.
+    - O módulo neutraliza proativamente 15 vulnerabilidades conhecidas por reescrever ou ocultar dezenas de marcações de Header na entrega de pacotes.
+- **Proteções Diretas no Backend (`app.use(helmet())`):**
+    - **Cross-Site Scripting (XSS):** Aplica a diretiva CSP impedindo execuções de scripts arbitrários invasores injetados externamente no DOM.
+    - **Hide X-Powered-By:** Mascaramento inteligente para despistar detectores passivos informando que o sistema operacional flui sob arquitetura Express/NodeJS.
+    - **Clickjacking Defense:** Implanta defesas estritas impedindo que o site seja moldado e espelhado através da tag IFrame para sequestros em "Social Engineering" ou espionagem por terceiros.
+    - **HSTS Enforcement:** Determina rotas de pacotes exclusivamente seguras predatando interações fracas sob navegações inseguras e forçando a proteção anti-sniffing de protocolo de certificados no servidor.
+
+## 28. Mitigação de Vulnerabilidades em Dependências Profundas (Tar CVEs) (20/03/2026)
+
+- **Atualização Mandatória de Segurança (`tar >= 7.5.11`):**
+    - Em resposta à auditoria de risco **"85 - High Risk"** detalhada por especialistas, o motor da API de Arquivos do backend `package.json` foi refatorado utilizando a funcionalidade de `overrides` do NPM para sanear componentes obsoletos.
+    - O pacote "fantasma" `tar` (utilizado internamente pelas raízes do sistema como o `sqlite3` na versão afetada `6.2.1`) teve todos os exploits blindados garantindo o repasse seguro para as instâncias da fundação `7.5.12`.
+- **Eliminação Total de Gaps na Automação em Servidor (CVEs Corrigidas):**
+    - Fechada a possibilidade da máquina servidora ser controlada externamente ou ceder a Path Traversal na manipulação de pastas *(CVE-2026-24842, CVE-2026-26960 e CVE-2026-23950)*.
+    - Tratados os "TOCTOU race condition" *(CVE-2026-29786, CVE-2026-23745, CVE-2026-31802)* que haviam explorações recém expostas circulando ativamente em repositórios da Web (Github Exploits).
+
+## 29. Fixação de Vulnerabilidade de XSS no Frontend (20/03/2026)
+
+- **Sanitização de Outputs Reativos (DOMPurify):**
+    - Identificada vulnerabilidade de alto risco *(High Risk - 85)* proveniente do uso nativo e cru da função `dangerouslySetInnerHTML` no interpretador de quebras de linha e negrito nativos do WhatsApp (linha 1017 de `App.tsx`).
+    - Instalada via NPM a biblioteca industrial `dompurify` junto à sua topologia de tipagem TypeScript avançada `@types/dompurify`.
+    - Os retornos HTML dinâmicos advindos de fontes inestáveis agora circulam encapsulados através do filtro sanitizador restritivo de código (`DOMPurify.sanitize()`), varrendo preventivamente atributos de gatilhos perigosos de Social Engineering, Injeções Maliciosas Externas e Account Takeover Attacks.
+
+## 30. Atualização Forçada de Módulos de Parser (QS CVEs) (20/03/2026)
+
+- **Correção da Dependência `qs` (Escalonamento Oculto):**
+    - Identificada vulnerabilidade no pacote `qs` (High Risk - *CVE-2026-2391* e Low Risk - *CVE-2025-15284*) permitindo ataques de abuso na falta de validação de input ("Attacker can abuse missing input validation").
+    - O módulo operava ocultamente como sub-dependência das raízes diretas do `express` e do `body-parser` (preso na versão 6.14.0).
+    - Refatoração do `package.json` utilizando o escopo de `overrides` do NPM para forçar a substituição completa na árvore de processos subjacentes, isolando as quebras e garantindo rodagem da versão final purificada `>=6.14.2` (escalonada pelo próprio auto-resolve do NPM para 6.15.0).
+
+## 31. Prevenção de DOS Através de Parser (20/03/2026)
+
+- **Atualização Mandatória de Segurança do pacote `body-parser` (`>= 2.2.1`):**
+    - Em resposta à auditoria de risco **"27 - Low Risk"**, mas cuja possibilidade estendia abertura para falhas de travamento massivo (Denial of Service - DoS).
+    - A versão instalada internamente no escopo da base do Express lidava de forma ineficiente com corpos de URL extremamente grandes na leitura, permitindo que uma rajada coordenada desestabilizasse e alocasse memória vitalícia quebrando temporariamente a API.
+    - Novamente valendo-se das configurações unificadas de bloqueios via `"overrides"` no `package.json`, engessou-se a dependência subjacente em todas as sub-camadas (ignorando e sobrescrevendo as resoluções legadas do package-lock do Express 5.1.0), para a nova versão robusta oficial `>=2.2.1`.

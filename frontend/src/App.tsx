@@ -9,6 +9,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { useTheme } from '@/components/theme-provider';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import DOMPurify from 'dompurify';
 import {
   ClipboardCopy, Check, BarChartBig, CalendarDays, CircleUserRound, Phone, MessageCircleMore,
   Bot, UserRound, Mails, Webhook, Presentation, CircleX,
@@ -1014,7 +1015,7 @@ ${normalizedMessage}
                     <div className="pl-4 space-y-2">
                       <hr />
                       {normalizedMessage.split("\n").map((line, i) => (
-                        <p key={i} dangerouslySetInnerHTML={{ __html: parseWhatsAppFormatting(line) }} />
+                        <p key={i} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(parseWhatsAppFormatting(line)) }} />
                       ))}
                       <hr />
                     </div>

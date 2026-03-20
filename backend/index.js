@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import fetch from 'node-fetch';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
@@ -10,6 +11,7 @@ import bcrypt from 'bcryptjs';
 const app = express();
 const port = process.env.PORT || 3005;
 
+app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
