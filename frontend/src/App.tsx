@@ -25,8 +25,10 @@ import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Login } from '@/components/login';
 import { ChangePassword } from '@/components/change-password';
 import { Settings } from '@/components/settings';
+import { getBaseUrl } from '@/lib/config';
 
 // Definição de Tipos para os dados da API
+
 export interface Notification {
   id: string;
   title: string;
@@ -85,6 +87,7 @@ interface CampaignSummary {
 }
 
 function App() {
+  const BASE_URL = getBaseUrl();
   const [reportData, setReportData] = useState<ReportCard[] | null>(null);
   const [cardList, setCardList] = useState<ReportCard[] | null>(null);
   const [campaignSummary, setCampaignSummary] = useState<CampaignSummary | null>(null);
@@ -118,7 +121,7 @@ function App() {
       const savedUser = JSON.parse(localStorage.getItem('user') || '{}');
       if (savedUser.theme === theme) return; // Se for igual não precisa API
 
-      apiFetch('http://localhost:3005/api/users/theme', {
+      apiFetch(`${BASE_URL}/api/users/theme`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ theme })
@@ -188,7 +191,7 @@ function App() {
 
     const fetchData = async () => {
       try {
-        const tagsResponse = await apiFetch('http://localhost:3005/api/tags');
+        const tagsResponse = await apiFetch(`${BASE_URL}/api/tags`);
         if (!tagsResponse.ok) {
           throw new Error('Falha de autorização ou erro no servidor ao buscar tags.');
         }
@@ -199,7 +202,7 @@ function App() {
           setTags((tagsData as any).results);
         }
 
-        const campaignsResponse = await apiFetch('http://localhost:3005/api/campaigns');
+        const campaignsResponse = await apiFetch(`${BASE_URL}/api/campaigns`);
         if (campaignsResponse.ok) {
           const campaignsDataJson = await campaignsResponse.json();
           setCampaignsData(campaignsDataJson);
@@ -218,7 +221,7 @@ function App() {
   useEffect(() => {
     const fetchLists = async () => {
       try {
-        const response = await fetch(`http://localhost:3005/api/lists?board=${selectedBoard}`);
+        const response = await fetch(`${BASE_URL}/api/lists?board=${selectedBoard}`);
         if (response.ok) {
           const data = await response.json();
           // A API retorna um array de listas dentro de 'results' ou diretamente?
@@ -273,7 +276,7 @@ function App() {
       throw new Error('Para filtrar por data, é necessário selecionar a Data de Início e a Data de Fim.');
     }
 
-    const baseUrl = 'http://localhost:3005/api/cards';
+    const baseUrl = `${BASE_URL}/api/cards`;
     const params = new URLSearchParams();
     params.append('board', selectedBoard);
 
@@ -412,7 +415,7 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
     }
 
     try {
-      const baseUrl = 'http://localhost:3005/api/campaign-summary';
+      const baseUrl = `${BASE_URL}/api/campaign-summary`;
       const params = new URLSearchParams();
       params.append('board', selectedBoard);
       const selectedBoardName = boards.find(b => b.id === selectedBoard)?.name || selectedBoard;
@@ -451,7 +454,7 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
     setSuccessMessage(null);
 
     try {
-      const response = await apiFetch('http://localhost:3005/api/campaign-summary/refresh', {
+      const response = await apiFetch(`${BASE_URL}/api/campaign-summary/refresh`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -508,7 +511,7 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
       for (const campaign of campaignsData) {
         try {
           // Usamos a função de refresh existente para cada campanha
-          const response = await apiFetch('http://localhost:3005/api/campaign-summary/refresh', {
+          const response = await apiFetch(`${BASE_URL}/api/campaign-summary/refresh`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -709,7 +712,7 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
               onLogout={handleLogout}
               campaignsData={campaignsData}
               fetchCampaigns={() => {
-                apiFetch('http://localhost:3005/api/campaigns')
+                apiFetch(`${BASE_URL}/api/campaigns`)
                   .then(res => res.json())
                   .then(data => setCampaignsData(data));
               }}

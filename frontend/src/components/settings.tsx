@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getBaseUrl } from '@/lib/config';
 import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -75,7 +76,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
     const totalCampPages = Math.ceil(filteredCamps.length / CAMP_PER_PAGE) || 1;
     const currentCamps = filteredCamps.slice((campPage - 1) * CAMP_PER_PAGE, campPage * CAMP_PER_PAGE);
 
-    const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3005';
+    const BASE_URL = getBaseUrl();
 
     const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
         const response = await fetch(url, options);

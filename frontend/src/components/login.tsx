@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getBaseUrl } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -43,7 +44,7 @@ export function Login({ onLogin }: LoginProps) {
         setLoading(true);
 
         try {
-            const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3005';
+            const BASE_URL = getBaseUrl();
             
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 10000);

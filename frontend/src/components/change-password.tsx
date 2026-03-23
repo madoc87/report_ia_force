@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getBaseUrl } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,7 +36,7 @@ export function ChangePassword({ onSuccess, token }: ChangePasswordProps) {
         setLoading(true);
 
         try {
-            const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3005';
+            const BASE_URL = getBaseUrl();
             const response = await fetch(`${BASE_URL}/api/change-password`, {
                 method: 'POST',
                 headers: {

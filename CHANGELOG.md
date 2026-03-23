@@ -519,3 +519,30 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
   - O perfil do "Operador" deixou de ver os painéis administrativos, ficando proibido de visualizar e usar os botões "Atualizar Todas Campanhas", "Gerar Relatório", "Buscar IDs", "Atualizar Campanha Exclusiva" e o "Enviar Webhook", mantendo apenas o "Resumo Campanha IA" e "Copiar" (permissão estrita).
   - **Gestão de Telas (Sidebar):** O menu de navegação lateral esquerdo obedece à lógica de esmaecimento reativo, onde Administradores continuam enxergando (e interagindo com as configs) perfeitamente; entretanto, Gestores e Operadores passam a ver unicamente visíveis e permitidos *Dashboard* e *Relatórios*, onde abas nulas (como Vendas, Produtos) nem figuram para eles.
   - **Gestores (`gestor`):** Esta perfil engloba perfeitamente a herança de liberação superior das travas dos Operadores para funções de `Refresh`: ganham a liberação e visualização do seletor circular de atualizações da campanha em bloco e nos cards estendidos sem lhes serem cedidos privilégios abusivos como os envios de Webhook, as buscas invasivas de IDs e geração ampla de Relatórios.
+
+## 34. Segurança de Runtime e Injeção de Variáveis de Ambiente no Docker (23/03/2026)
+
+- **Sanitização Completa de Chamadas Hardcoded (Mixed Content Fix):**
+  - Removidas todas as ocorrências de `http://localhost:3005` espalhadas em `App.tsx`, `login.tsx`, `settings.tsx`, `dashboard.tsx` e `change-password.tsx`.
+  - Todas as chamadas de API agora passam por um único ponto central de resolução de URL.
+
+- **Módulo Central de Configuração Pública (`src/lib/config.ts`):**
+  - Criado o módulo `config.ts` com as funções `loadRuntimeConfig()` e `getBaseUrl()` como **única fonte de verdade** para a URL do backend em toda a aplicação.
+  - `loadRuntimeConfig()` é chamado em `main.tsx` **antes** de montar o React, garantindo que `getBaseUrl()` esteja resolvido no momento de qualquer fetch de componente.
+
+- **Substituição de `window.ENV` por `runtime-config.json` (Decisão de Segurança):**
+  - A abordagem anterior injetava um arquivo JS executável (`env-config.js`) via `<script>` no HTML. Qualquer valor ali exposto poderia, por descuido, incluir segredos reais (tokens, chaves privadas).
+  - A nova abordagem gera um **JSON puro** em `/runtime-config.json`, servido como arquivo estático pelo Nginx.
+  - O frontend lê esse JSON via `fetch()` no startup — sem JS executável, sem risco de code injection acidental.
+
+- **`env.sh` Reescrito com Whitelist Explícita e Escaping Seguro:**
+  - Uso de `set -eu` para falhar rápido em caso de variável não definida.
+  - Escaping de caracteres especiais via `sed` antes de gravar no JSON (previne JSON inválido ou injection).
+  - **Regra de ouro documentada:** só variáveis públicas (ex: `VITE_API_URL`) entram no arquivo. Nunca `JWT_SECRET`, tokens de API ou senhas.
+
+- **Limpeza do Dockerfile:**
+  - Removido o bloco `ARG VITE_API_URL / ENV VITE_API_URL` do estágio `builder`, que criava uma segunda fonte de configuração conflitante com o runtime.
+  - A URL agora é lida **exclusivamente** em runtime, tornando a imagem Docker agnóstica ao ambiente — a mesma imagem serve dev, staging e produção, mudando apenas as variáveis do EasyPanel.
+
+- **Fallback para Desenvolvimento Local:**
+  - Se `runtime-config.json` não existir (ambiente local sem Docker), `loadRuntimeConfig()` cai automaticamente no `import.meta.env.VITE_API_URL` do arquivo `.env` do Vite, mantendo a experiência de desenvolvimento inalterada.

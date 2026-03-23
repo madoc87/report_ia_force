@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getBaseUrl } from '@/lib/config';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -63,7 +64,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     const fetchDashboardData = async () => {
       try {
         const token = localStorage.getItem('token');
-        const response = await fetch('http://localhost:3005/api/dashboard-data', {
+        const response = await fetch(`${getBaseUrl()}/api/dashboard-data`, {
           headers: {
             ...(token ? { 'Authorization': `Bearer ${token}` } : {})
           }
