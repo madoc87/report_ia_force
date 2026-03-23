@@ -137,9 +137,16 @@ let db;
         time TEXT,
         reference_month TEXT,
         number INTEGER,
+        template_enviado TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Migrate template_enviado
+    try {
+      await db.exec(`ALTER TABLE campaigns ADD COLUMN template_enviado TEXT`);
+      await db.exec(`UPDATE campaigns SET template_enviado = 'Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato' WHERE template_enviado IS NULL`);
+    } catch (err) { }
 
     // User generation or recovery mechanism via .env
     if (ADMIN_EMAIL && ADMIN_PASSWORD) {
@@ -657,6 +664,7 @@ app.get('/api/campaigns', authenticateToken, async (req, res) => {
         time_only: c.time,
         reference_month: c.reference_month,
         number: c.number,
+        template_enviado: c.template_enviado || 'Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato',
         month: `D${numStr}-${c.reference_month.substring(0, 3)}` // ex: D01-Jan
       };
     });
@@ -667,7 +675,7 @@ app.get('/api/campaigns', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/campaigns', authenticateToken, authorizeAdmin, async (req, res) => {
-  let { name, date, time, reference_month, number } = req.body;
+  let { name, date, time, reference_month, number, template_enviado } = req.body;
   if (!name || !name.trim() || !reference_month) {
     return res.status(400).json({ message: 'O nome e o mês de referência são obrigatórios.' });
   }
@@ -686,8 +694,8 @@ app.post('/api/campaigns', authenticateToken, authorizeAdmin, async (req, res) =
     }
 
     const { lastID } = await db.run(
-      'INSERT INTO campaigns (name, date, time, reference_month, number) VALUES (?, ?, ?, ?, ?)',
-      [name, date, time, reference_month, number]
+      'INSERT INTO campaigns (name, date, time, reference_month, number, template_enviado) VALUES (?, ?, ?, ?, ?, ?)',
+      [name, date, time, reference_month, number, template_enviado]
     );
 
     res.status(201).json({ message: 'Campanha criada com sucesso', id: lastID });
@@ -697,7 +705,7 @@ app.post('/api/campaigns', authenticateToken, authorizeAdmin, async (req, res) =
 });
 
 app.put('/api/campaigns/:id', authenticateToken, authorizeAdmin, async (req, res) => {
-  const { name, date, time, reference_month, number } = req.body;
+  const { name, date, time, reference_month, number, template_enviado } = req.body;
   if (!name || !name.trim() || !reference_month || !number) {
     return res.status(400).json({ message: 'Todos os campos obrigatórios devem ser preenchidos.' });
   }
@@ -711,8 +719,8 @@ app.put('/api/campaigns/:id', authenticateToken, authorizeAdmin, async (req, res
 
   try {
     await db.run(
-      'UPDATE campaigns SET name = ?, date = ?, time = ?, reference_month = ?, number = ? WHERE id = ?',
-      [name, date, time, reference_month, number, req.params.id]
+      'UPDATE campaigns SET name = ?, date = ?, time = ?, reference_month = ?, number = ?, template_enviado = ? WHERE id = ?',
+      [name, date, time, reference_month, number, template_enviado, req.params.id]
     );
     res.status(200).json({ message: 'Campanha atualizada com sucesso.' });
   } catch (error) {

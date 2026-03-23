@@ -24,6 +24,7 @@ export type CampaignOption = {
   reference_month?: string;
   number?: number;
   month: string;
+  template_enviado?: string;
 };
 
 interface MultiSelectCampaignProps {

@@ -15,12 +15,17 @@ export function Sidebar({ activeTab, setActiveTab, isOpen, onClose, user, onLogo
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, enabled: true },
     { id: 'relatorios', label: 'Relatórios', icon: FileText, enabled: true },
-    { id: 'vendas', label: 'Vendas', icon: ShoppingCart, enabled: false },
-    { id: 'produtos', label: 'Produtos', icon: Package, enabled: false },
-    { id: 'clientes', label: 'Clientes', icon: Users, enabled: false },
-    { id: 'analises', label: 'Análises', icon: BarChart3, enabled: false },
-    { id: 'settings', label: 'Configurações', icon: Settings, enabled: user?.role === 'admin' },
+    { id: 'vendas', label: 'Vendas', icon: ShoppingCart, enabled: false, adminOnly: true },
+    { id: 'produtos', label: 'Produtos', icon: Package, enabled: false, adminOnly: true },
+    { id: 'clientes', label: 'Clientes', icon: Users, enabled: false, adminOnly: true },
+    { id: 'analises', label: 'Análises', icon: BarChart3, enabled: false, adminOnly: true },
+    { id: 'settings', label: 'Configurações', icon: Settings, enabled: user?.role === 'admin', adminOnly: true },
   ];
+
+  const visibleItems = menuItems.filter(item => {
+    if (item.adminOnly && user?.role !== 'admin') return false;
+    return true;
+  });
 
   return (
     <>
@@ -46,7 +51,7 @@ export function Sidebar({ activeTab, setActiveTab, isOpen, onClose, user, onLogo
         </div>
 
         <nav className="flex-1 px-4 space-y-2 overflow-y-auto">
-          {menuItems.map((item) => (
+          {visibleItems.map((item) => (
             <button
               key={item.id}
               disabled={!item.enabled}

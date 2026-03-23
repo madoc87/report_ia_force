@@ -507,3 +507,15 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
 - **Network / Portas:**
   - O contêiner de Frontend finalizado do Nginx repassa por padrão os estáticos na porta `80`. Exponha apenas a porta **80**.
   - O EasyPanel cuidará de puxar seu Frontend e jogá-lo no ar pro mundo por meio do domínio visual primário de proxy (ex: `relatorios.dominio.com`).
+
+## 33. Criação de Nova Regra e Ajustes de Permissões (23/03/2026)
+
+- **Nova Regra de Acesso ("Gestor"):**
+  - Adicionado suporte a uma terceira categoria de usuário (`gestor`) tanto na interface de criação de contas quanto no backend e perfis de escopo visual.
+  - A interface de configuração de usuários ganhou uma caixa de seleção (`Select`) suspensa permitindo administradores cadastrarem contas explicitamente como *Administrador*, *Gestor* ou *Operador*.
+  - A coluna "Regras" da tabela de contas agora reflete corretamente os papéis.
+- **Tratamento Específico de Permissões (Dashboard & Relatórios):**
+  - **Operador:** O usuário tipo `user` foi refatorado para que a aplicação sempre carregue diretamente no **Dashboard** após o login sem forçar a aba de relatórios.
+  - O perfil do "Operador" deixou de ver os painéis administrativos, ficando proibido de visualizar e usar os botões "Atualizar Todas Campanhas", "Gerar Relatório", "Buscar IDs", "Atualizar Campanha Exclusiva" e o "Enviar Webhook", mantendo apenas o "Resumo Campanha IA" e "Copiar" (permissão estrita).
+  - **Gestão de Telas (Sidebar):** O menu de navegação lateral esquerdo obedece à lógica de esmaecimento reativo, onde Administradores continuam enxergando (e interagindo com as configs) perfeitamente; entretanto, Gestores e Operadores passam a ver unicamente visíveis e permitidos *Dashboard* e *Relatórios*, onde abas nulas (como Vendas, Produtos) nem figuram para eles.
+  - **Gestores (`gestor`):** Esta perfil engloba perfeitamente a herança de liberação superior das travas dos Operadores para funções de `Refresh`: ganham a liberação e visualização do seletor circular de atualizações da campanha em bloco e nos cards estendidos sem lhes serem cedidos privilégios abusivos como os envios de Webhook, as buscas invasivas de IDs e geração ampla de Relatórios.

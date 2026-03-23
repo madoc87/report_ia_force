@@ -97,7 +97,11 @@ function App() {
   const [loadingDots, setLoadingDots] = useState('');
   const [campaignsData, setCampaignsData] = useState<CampaignOption[]>([]);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState('relatorios');
+  const [activeTab, setActiveTab] = useState(() => {
+    const savedUser = localStorage.getItem('user');
+    const parsedUser = savedUser ? JSON.parse(savedUser) : null;
+    return parsedUser?.role === 'user' ? 'dashboard' : 'relatorios';
+  });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
@@ -372,12 +376,22 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
 📊 Respostas (Respostas/Clientes): ${campaignSummary.responseRate}
 📉 Conversão (Vendas/Clientes): ${campaignSummary.conversionSalesClients}
 🥧 Conversão (Vendas/Respostas): ${campaignSummary.conversionSalesResponses}
-${/*📨 Mensagem enviada:*/''}
+`;
+    // Add dynamic templates
+    const agrupados = templatesAgrupados();
+    let templatesText = '';
+    agrupados.forEach((item) => {
+      if (agrupados.length > 1) {
+        templatesText += `\n[Mensagem das campanhas: ${item.campanhas}]\n`;
+      } else {
+        templatesText += `\n[Mensagem enviada]\n`;
+      }
+      templatesText += `${item.template.replace(/ {2,}/g, '\n\n')}\n`;
+    });
 
-${/*normalizedMessage*/''}
-    `.trim();
+    const finalSummaryText = (summaryText + '\n' + templatesText).trim();
 
-    navigator.clipboard.writeText(summaryText).then(() => {
+    navigator.clipboard.writeText(finalSummaryText).then(() => {
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000); // O ícone de "copiado" volta ao normal após 2 segundos
     });
@@ -543,12 +557,39 @@ ${/*normalizedMessage*/''}
   };
 
 
-  // Tratamento do texto da mensagem enviada
-  const template_enviado = "Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato";
-  const rawMessage = template_enviado;
+  // Função para agrupar campanhas por template
+  const templatesAgrupados = () => {
+    if (!campaignSummary || selectedCampaigns.length === 0) return [];
+    const grouped = new Map<string, string[]>();
 
-  // Se o banco removeu \n e deixou 2 espaços, converta de volta:
-  const normalizedMessage = rawMessage.replace(/ {2,}/g, '\n\n');
+    selectedCampaigns.forEach((campName) => {
+      const campDb = campaignsData.find((c: any) => c.name === campName);
+      const template = campDb?.template_enviado || "Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato";
+      
+      const list = grouped.get(template) || [];
+      list.push(campName);
+      grouped.set(template, list);
+    });
+
+    return Array.from(grouped.entries()).map(([template, campanhas]) => ({
+      template,
+      campanhas: campanhas.join(', ')
+    }));
+  };
+
+  // Tratamento do texto da webhook (envia o agrupamento ou apenas o primeiro)
+  // Como o webhook precisava de apenas um texto, vou formatar da mesma forma que o copy.
+  const getWebhookMessage = () => {
+    const agrupados = templatesAgrupados();
+    let templatesText = '';
+    agrupados.forEach((item) => {
+      if (agrupados.length > 1) {
+        templatesText += `[Mensagem das campanhas: ${item.campanhas}]\n`;
+      }
+      templatesText += `${item.template.replace(/ {2,}/g, '\n\n')}\n`;
+    });
+    return templatesText.trim();
+  };
 
 
   //Função para formatar mensagem no formato deo WhatsApp
@@ -581,7 +622,7 @@ ${/*normalizedMessage*/''}
       total_respostas: campaignSummary.totalHabllaResponses,
       venda_ia: campaignSummary.salesIA,
       venda_manual: campaignSummary.salesManual,
-      mgs_enviada: normalizedMessage,
+      mgs_enviada: getWebhookMessage(),
     };
 
     try {
@@ -691,35 +732,39 @@ ${/*normalizedMessage*/''}
                 <CardContent>
                   <form onSubmit={handleGenerateReport} className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-8 gap-4 items-end">
-                      <div className='min-w-0 md:col-span-1 xl:col-span-2'>
-                        <Label htmlFor="board">Quadro</Label>
-                        <Select value={selectedBoard} onValueChange={setSelectedBoard}>
-                          <SelectTrigger id="board">
-                            <SelectValue placeholder="Selecione o quadro" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {boards.map((board) => (
-                              <SelectItem key={board.id} value={board.id}>
-                                {board.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className='min-w-0 md:col-span-1 xl:col-span-2'>
-                        <Label>Período</Label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <div className="min-w-0">
-                            <DatePicker placeholder="Data de Início" date={startDate} setDate={setStartDate} />
+                      {user?.role === 'admin' && (
+                        <>
+                          <div className='min-w-0 md:col-span-1 xl:col-span-2'>
+                            <Label htmlFor="board">Quadro</Label>
+                            <Select value={selectedBoard} onValueChange={setSelectedBoard}>
+                              <SelectTrigger id="board">
+                                <SelectValue placeholder="Selecione o quadro" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {boards.map((board) => (
+                                  <SelectItem key={board.id} value={board.id}>
+                                    {board.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
-                          <div className="min-w-0">
-                            <DatePicker placeholder="Data de Fim" date={endDate} setDate={setEndDate} />
-                          </div>
-                        </div>
-                      </div>
 
-                      <div className='min-w-0 md:col-span-2 xl:col-span-4'>
+                          <div className='min-w-0 md:col-span-1 xl:col-span-2'>
+                            <Label>Período</Label>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div className="min-w-0">
+                                <DatePicker placeholder="Data de Início" date={startDate} setDate={setStartDate} />
+                              </div>
+                              <div className="min-w-0">
+                                <DatePicker placeholder="Data de Fim" date={endDate} setDate={setEndDate} />
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      <div className={`min-w-0 ${user?.role === 'admin' ? 'md:col-span-2 xl:col-span-4' : 'md:col-span-2 xl:col-span-8'}`}>
                         <Label htmlFor="campaign">Campanha</Label>
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                           {/* <Input
@@ -740,23 +785,25 @@ ${/*normalizedMessage*/''}
                           </div>
                           <div className="flex items-center space-x-1 shrink-0">
                             <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={handleUpdateAllCampaigns}
-                                    disabled={isLoading}
-                                    className="h-9 w-9"
-                                  >
-                                    <RefreshCw className="h-4 w-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>Atualizar todas as campanhas cadastradas</p>
-                                </TooltipContent>
-                              </Tooltip>
+                              {user?.role !== 'user' && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={handleUpdateAllCampaigns}
+                                      disabled={isLoading}
+                                      className="h-9 w-9"
+                                    >
+                                      <RefreshCw className="h-4 w-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Atualizar todas as campanhas cadastradas</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
                             </TooltipProvider>
 
                             <Checkbox
@@ -769,28 +816,36 @@ ${/*normalizedMessage*/''}
                         </div>
                       </div>
 
-                      <div className='min-w-0 md:col-span-1 xl:col-span-2'>
-                        <Label htmlFor="source">Fonte</Label>
-                        <Input name="source" id="source" placeholder="Nome da fonte" value={source} onChange={(e) => setSource(e.target.value)} />
-                      </div>
+                      {user?.role === 'admin' && (
+                        <>
+                          <div className='min-w-0 md:col-span-1 xl:col-span-2'>
+                            <Label htmlFor="source">Fonte</Label>
+                            <Input name="source" id="source" placeholder="Nome da fonte" value={source} onChange={(e) => setSource(e.target.value)} />
+                          </div>
 
-                      <div className='min-w-0 md:col-span-1 xl:col-span-2'>
-                        <Label htmlFor="tags">Etiquetas</Label>
-                        <MultiSelectCombobox
-                          options={tags}
-                          selected={selectedTags}
-                          onChange={setSelectedTags}
-                          className="w-full"
-                        />
-                      </div>
+                          <div className='min-w-0 md:col-span-1 xl:col-span-2'>
+                            <Label htmlFor="tags">Etiquetas</Label>
+                            <MultiSelectCombobox
+                              options={tags}
+                              selected={selectedTags}
+                              onChange={setSelectedTags}
+                              className="w-full"
+                            />
+                          </div>
+                        </>
+                      )}
                     </div>
                     <div className="flex space-x-2">
-                      <Button type="submit" disabled={isLoading}>
-                        {isLoading ? 'Gerando...' : 'Gerar Relatório'}
-                      </Button>
-                      <Button type="button" variant="secondary" onClick={handleFindCardsClick} disabled={isLoading}>
-                        {isLoading ? 'Buscando...' : 'Buscar IDs'}
-                      </Button>
+                      {user?.role === 'admin' && (
+                        <>
+                          <Button type="submit" disabled={isLoading}>
+                            {isLoading ? 'Gerando...' : 'Gerar Relatório'}
+                          </Button>
+                          <Button type="button" variant="secondary" onClick={handleFindCardsClick} disabled={isLoading}>
+                            {isLoading ? 'Buscando...' : 'Buscar IDs'}
+                          </Button>
+                        </>
+                      )}
                       <Button type="button" variant="outline" onClick={handleGenerateCampaignSummary} disabled={isLoading}>
                         {isLoading ? 'Gerando...' : 'Resumo Campanha IA'}
                       </Button>
@@ -909,17 +964,21 @@ ${/*normalizedMessage*/''}
                     </div>
                     <div className="flex gap-2">
                       {/* Botão atualizar campanha */}
-                      <Button variant="ghost" size="icon" onClick={handleUpdateCampaign} title="Atualizar Campanha">
-                        <RotateCcw className="h-4 w-4" />
-                      </Button>
+                      {user?.role !== 'user' && (
+                        <Button variant="ghost" size="icon" onClick={handleUpdateCampaign} title="Atualizar Campanha">
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                      )}
                       {/* Botão copiar */}
                       <Button variant="ghost" size="icon" onClick={handleCopySummary} title="Copiar Resumo">
                         {isCopied ? <Check className="h-4 w-4 text-green-500" /> : <ClipboardCopy className="h-4 w-4" />}
                       </Button>
                       {/* Botão enviar webhook */}
-                      <Button variant="ghost" size="icon" onClick={handleSendWebhook} title="Enviar Webhook">
-                        <Webhook className='h-4 w-4' />
-                      </Button>
+                      {user?.role === 'admin' && (
+                        <Button variant="ghost" size="icon" onClick={handleSendWebhook} title="Enviar Webhook">
+                          <Webhook className='h-4 w-4' />
+                        </Button>
+                      )}
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-2 text-base">
@@ -1012,12 +1071,19 @@ ${/*normalizedMessage*/''}
                   <p>* Não quero contato</p>
                   <hr />
                 </div> */}
-                    <div className="pl-4 space-y-2">
-                      <hr />
-                      {normalizedMessage.split("\n").map((line, i) => (
-                        <p key={i} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(parseWhatsAppFormatting(line)) }} />
+                    <div className="pl-4 space-y-4">
+                      {templatesAgrupados().map((item, index) => (
+                        <div key={index} className="space-y-2">
+                          <hr />
+                          <p className="text-[13px] font-semibold text-muted-foreground my-2">
+                            Para {templatesAgrupados().length > 1 ? `as campanhas (${item.campanhas})` : "esta campanha"}:
+                          </p>
+                          {item.template.replace(/ {2,}/g, '\n\n').split("\n").map((line, i) => (
+                            <p key={i} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(parseWhatsAppFormatting(line)) }} />
+                          ))}
+                          <hr />
+                        </div>
                       ))}
-                      <hr />
                     </div>
 
                   </CardContent>

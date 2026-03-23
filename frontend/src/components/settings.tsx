@@ -10,6 +10,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Trash2, KeyRound, PencilLine, Info } from 'lucide-react';
 import { Notification } from '@/App';
 import { DatePicker } from '@/components/ui/date-picker';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { format, parse, isValid } from 'date-fns';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -35,6 +37,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
     const [newName, setNewName] = useState('');
     const [newEmail, setNewEmail] = useState('');
     const [newPassword, setNewPassword] = useState('');
+    const [newRole, setNewRole] = useState('user');
 
     // Create campaign form
     const [campName, setCampName] = useState('');
@@ -48,6 +51,10 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
     const [campPage, setCampPage] = useState(1);
     const [campEditingId, setCampEditingId] = useState<number | null>(null);
     const [campNotSent, setCampNotSent] = useState(false);
+    const [templatePopoverOpen, setTemplatePopoverOpen] = useState(false);
+    const [campTemplateEnviado, setCampTemplateEnviado] = useState(
+        "Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato"
+    );
 
     const fullMonthNames: Record<string, string> = {
         Jan: 'Janeiro', Fev: 'Fevereiro', Mar: 'Março', Abr: 'Abril', Mai: 'Maio', Jun: 'Junho',
@@ -111,7 +118,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ name: newName, email: newEmail, password: newPassword, role: 'user' })
+                body: JSON.stringify({ name: newName, email: newEmail, password: newPassword, role: newRole })
             });
 
             const data = await response.json();
@@ -120,6 +127,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
             setNewName('');
             setNewEmail('');
             setNewPassword('');
+            setNewRole('user');
             fetchUsers();
         } catch (err: any) {
             setError(err.message);
@@ -219,7 +227,8 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                     date: processDate,
                     time: processTime,
                     reference_month: campRefMonth,
-                    number: campNumber ? parseInt(campNumber) : undefined
+                    number: campNumber ? parseInt(campNumber) : undefined,
+                    template_enviado: campTemplateEnviado
                 })
             });
 
@@ -233,6 +242,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
             setCampNumber('');
             setCampEditingId(null);
             setCampNotSent(false);
+            setCampTemplateEnviado("Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato");
             if (fetchCampaigns) fetchCampaigns();
         } catch (err: any) {
             setCampError(err.message);
@@ -368,16 +378,44 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                                         onCheckedChange={(checked) => setCampNotSent(checked === true)}
                                     />
                                     <Label htmlFor="campNotSent" className="text-sm font-normal cursor-pointer text-muted-foreground leading-tight">
+
                                         Campanha não enviada?
                                     </Label>
                                 </div>
                                 <div className="flex gap-2 w-full md:col-span-12 mt-2">
-                                    <Button type="submit" disabled={campLoad} className="w-full font-bold">
+                                    <Popover open={templatePopoverOpen} onOpenChange={setTemplatePopoverOpen}>
+                                        <PopoverTrigger asChild>
+                                            <Button type="button" variant="outline" className="px-4 shrink-0 text-muted-foreground">
+                                                Editar Mensagem
+                                            </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-80 p-4">
+                                            <div className="space-y-4">
+                                                <div className="space-y-2">
+                                                    <h4 className="font-medium text-sm leading-none">Template da Mensagem</h4>
+                                                    <p className="text-xs text-muted-foreground">Esta é a mensagem padrão que será vinculada a esta campanha. Você pode ajustá-la agora ou a qualquer momento.</p>
+                                                    <textarea 
+                                                        className="w-full min-h-[140px] text-sm border border-zinc-800 bg-background rounded-md p-2 mt-2 focus:outline-none focus:ring-2 focus:ring-ring"
+                                                        value={campTemplateEnviado}
+                                                        onChange={e => setCampTemplateEnviado(e.target.value)}
+                                                    />
+                                                </div>
+                                                <Button 
+                                                    type="button" 
+                                                    className="w-full" 
+                                                    onClick={() => setTemplatePopoverOpen(false)}
+                                                >
+                                                    Salvar Template
+                                                </Button>
+                                            </div>
+                                        </PopoverContent>
+                                    </Popover>
+                                    <Button type="submit" disabled={campLoad} className="w-full font-bold flex-1">
                                         {campLoad ? 'Processando...' : (campEditingId ? 'Atualizar Campanha' : 'Cadastrar Campanha')}
                                     </Button>
                                     {campEditingId && (
                                         <Button type="button" variant="outline" onClick={() => {
-                                            setCampName(''); setCampDate(new Date()); setCampTime(''); setCampRefMonth(MONTH_OPTIONS[new Date().getMonth()]); setCampNumber(''); setCampEditingId(null); setCampNotSent(false);
+                                            setCampName(''); setCampDate(new Date()); setCampTime(''); setCampRefMonth(MONTH_OPTIONS[new Date().getMonth()]); setCampNumber(''); setCampEditingId(null); setCampNotSent(false); setCampTemplateEnviado("Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato");
                                         }} className="w-full md:w-auto">
                                             Cancelar
                                         </Button>
@@ -439,6 +477,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                                                         setCampNumber(c.number?.toString() || '');
                                                         setCampEditingId(c.id);
                                                         setCampNotSent(isNotSent);
+                                                        setCampTemplateEnviado(c.template_enviado || "Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato");
                                                         window.scrollTo({ top: 0, behavior: 'smooth' });
                                                     }} className="hover:text-blue-500 hover:border-blue-500" title="Editar campanha">
                                                         <PencilLine className="w-4 h-4" />
@@ -476,7 +515,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
 
                     <div className="mb-8 p-4 border border-zinc-800 rounded-xl space-y-4">
                         <h3 className="font-semibold">Criar Novo Usuário</h3>
-                        <form onSubmit={handleCreateUser} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                        <form onSubmit={handleCreateUser} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
                             <div className="space-y-2">
                                 <Label htmlFor="name">Nome / Empresa</Label>
                                 <Input id="name" required value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nome de exibição..." className="bg-background" />
@@ -488,6 +527,19 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                             <div className="space-y-2">
                                 <Label htmlFor="password">Senha Inicial</Label>
                                 <Input id="password" type='password' required value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="••••••" className="bg-background" />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="role">Regra</Label>
+                                <Select value={newRole} onValueChange={setNewRole}>
+                                    <SelectTrigger id="role" className="bg-background">
+                                        <SelectValue placeholder="Selecione a regra" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="admin">Administrador</SelectItem>
+                                        <SelectItem value="gestor">Gestor</SelectItem>
+                                        <SelectItem value="user">Analista</SelectItem>
+                                    </SelectContent>
+                                </Select>
                             </div>
                             <Button type="submit" disabled={loading} className="w-full font-bold">
                                 {loading ? 'Cadastrando' : 'Adicionar Usuário'}
@@ -511,7 +563,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                                     <TableRow key={u.id}>
                                         <TableCell className="font-medium">{u.name}</TableCell>
                                         <TableCell>{u.email}</TableCell>
-                                        <TableCell>{u.role === 'admin' ? 'Administrador' : 'Operador'}</TableCell>
+                                        <TableCell>{u.role === 'admin' ? 'Administrador' : u.role === 'gestor' ? 'Gestor' : 'Analista'}</TableCell>
                                         <TableCell className="text-right">
                                             <div className="flex justify-end gap-2">
                                                 <Button variant="outline" size="sm" onClick={() => handleResetPassword(u.id, u.name)} title="Forçar mudança de senha">
