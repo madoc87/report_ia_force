@@ -472,3 +472,38 @@ Após esses passos, todo o seu código (backend e frontend) estará no repositó
     - Em resposta à auditoria de risco **"27 - Low Risk"**, mas cuja possibilidade estendia abertura para falhas de travamento massivo (Denial of Service - DoS).
     - A versão instalada internamente no escopo da base do Express lidava de forma ineficiente com corpos de URL extremamente grandes na leitura, permitindo que uma rajada coordenada desestabilizasse e alocasse memória vitalícia quebrando temporariamente a API.
     - Novamente valendo-se das configurações unificadas de bloqueios via `"overrides"` no `package.json`, engessou-se a dependência subjacente em todas as sub-camadas (ignorando e sobrescrevendo as resoluções legadas do package-lock do Express 5.1.0), para a nova versão robusta oficial `>=2.2.1`.
+
+## 32. Preparação de Infraestrutura Docker e Configuração Nuvem (EasyPanel) (20/03/2026)
+
+- **Configuração de Arquitetura de Contêineres Isolados (Monorepo):**
+    - **Backend Dockerfile:** Adicionado arquivo `backend/Dockerfile` que inicializa um ambiente focado em Node 20. Ele recorta todas as dependências de desenvolvimento do terminal (`npm install --omit=dev`) e inicia o serviço `index.js` expondo a porta `3005`.
+    - **Aprimoramento de Persistência SQLite:** Modificado o path central do banco de dados na inicialização do backend. O caminho migrou de um estático local `./database.sqlite` para suportar fallback da variável global `process.env.DATABASE_PATH`. Isso garante que o arquivo de logins e campanhas possa ser preservado fora do container (Via _Mount Volumes_ do Docker).
+    - **Frontend Dockerfile (Multi-Stage):** Adicionada a compilação do React na imagem `frontend/Dockerfile`. Numa primeira camada pesada (Builder) ele gera os arquivos visuais limpos pro VITE com a tipagem do DOM. Na segunda etapa, essa compilação destrói tudo e move apenas a aplicação crua para um contêiner ultra leve baseado em **Nginx**, focado massivamente em redirecionamento de tela de altíssimo disparo.
+    - **Nginx Conf:** Injentado o arquivo de diretrizes reativas `frontend/nginx.conf` resolvendo completamente eventuais quedas (Erro 404 - Page NotFound) de refreshs forçados através do redirecionamento cego `try_files` no DOM virtual.
+
+### Guia de Instalação e Deploy Oficial (EasyPanel)
+
+Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel), siga o manual de arquitetura:
+
+#### 1. Aplicação Backend (API Node)
+- **Modo de Build/Source:** Vincular ao Github. Mudar de Nixpacks para "Dockerfile".
+- **Advanced / Build Context:** 
+  - **Subdirectory:** Configurar para a pasta `/backend`.
+- **Environment (Variáveis Essenciais):**
+  - Copie as credenciais do `.env.example`.
+  - Atrele uma nova variável obrigatória chamada `DATABASE_PATH` apontando para a pasta persistente do EasyPanel (ex: `DATABASE_PATH=/app/data/database.sqlite`).
+- **Mounts / Volumes:**
+  - Crie uma linha em Mount apontando o armazenamento para `/app/data`. Toda informação escrita ali durará para sempre e nunca será morta pelos resets de deploy contínuos.
+- **Network / Portas:**
+  - Abra para tráfego localmente pela porta do container `3005`.
+  - Gere o Domínio externo e instale o Proxy de SSL Let's Encrypt padrão. (ex: `api.dominio.com`).
+
+#### 2. Aplicação Frontend (Painel React)
+- **Modo de Build/Source:** O MESMO Github. Tipo "Dockerfile".
+- **Advanced / Build Context:** 
+  - **Subdirectory:** Configurar para a pasta `/frontend`.
+- **Environment (Comunicação com a API):**
+  - **VITE_API_URL:** Especifique o URL que você gerou no passo acima da API, usando tráfego de saída real (Ex: `VITE_API_URL=https://api.dominio.com`).
+- **Network / Portas:**
+  - O contêiner de Frontend finalizado do Nginx repassa por padrão os estáticos na porta `80`. Exponha apenas a porta **80**.
+  - O EasyPanel cuidará de puxar seu Frontend e jogá-lo no ar pro mundo por meio do domínio visual primário de proxy (ex: `relatorios.dominio.com`).

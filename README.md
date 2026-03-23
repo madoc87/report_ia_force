@@ -2,11 +2,48 @@
 
 ## Visão Geral
 
-Report IA Force é uma aplicação web full-stack projetada para gerar relatórios de vendas de campanhas a partir de dados consultados de uma API de CRM. A aplicação possui uma interface moderna com temas claro e escuro, permitindo que os usuários filtrem e visualizem dados de vendas com base em múltiplos critérios.
+O **Report IA Force** é uma aplicação web full-stack empresarial projetada para unificar, gerar e visualizar relatórios inteligentes de campanhas e vendas a partir de uma API de CRM. Consolidada num único monorepo, a aplicação fornece tanto um painel administrativo em React (suportando gestão de tags, criação de campanhas via CRUD e Dashboards avançados) quanto um proxy de Backend NodeJS.
 
-O backend atua como um proxy seguro para a API externa, enquanto o frontend oferece uma experiência de usuário rica e interativa para a construção de relatórios personalizados.
+### Principais Destalhes:
+- Frontend (Vite + React + Tailwind + Recharts).
+- Conexão e armazenamento otimizado via Banco de Dados SQLite com cache.
+- Módulos avançados de Segurança HTTP (Helmet, CSRF Protection, DOS mitigação e DOMPurify contra XSS).
+- Painel de Gestão e Criação de Administradores nativo.
 
-## Ideia Inicial
+---
+
+## Como Instalar e Dar Deploy (EasyPanel / Docker)
+
+A aplicação foi preparada arquiteturalmente para rodar de forma isolada tanto localmente quanto em Servidores usando a infraestrutura Docker (ex: EasyPanel). No EasyPanel, utilizaremos o método nativo de **Dockerfile**, sem precisar separar a aplicação em dois repositórios diferentes.
+
+### 1. Aplicação Backend (API Node)
+- **Modo de Build/Source:** Escolha o Repositório do Github conectado na plataforma e mude o tipo de build de Nixpacks para "Dockerfile".
+- **Advanced / Build Context:** 
+  - **Subdirectory (e Root Directory):** Configure com a pasta `/backend`.
+- **Environment (Variáveis Essenciais):**
+  - Preencha na plataforma todas as credenciais base que você encontra no arquivo `backend/.env.example` da pasta raiz.
+    - **O que é o `JWT_SECRET`?** É apenas a senha-criptográfica do seu sistema (crie qualquer palavra forte: ex `senha_jwt_029`). O Frontend usará essa proteção para isolar os logins!
+  - *Lembre-se de configurar a variável `DATABASE_PATH` apontando para o disco rígido:* E.g. `DATABASE_PATH=/app/data/database.sqlite`
+- **Mounts / Volumes:**
+  - Crie um Volume na página de _Mounts_ apontando para o diretório `/app/data`. Assim toda a informação do SQLite sobreviverá aos deploys!
+- **Network / Portas:**
+  - Exponha localmente pela porta do container `3005` e crie em cima do Domínio público (ex: `api.dominio.com.br`) na interface de Domains gerando os proxies do Let's Encrypt padrão.
+
+### 2. Aplicação Frontend (Painel React SPA)
+- **Modo de Build/Source:** Vincule O MESMO Github anterior e defina como tipo "Dockerfile".
+- **Advanced / Build Context:** 
+  - **Subdirectory (e Root Directory):** Configure com a pasta `/frontend`.
+- **Environment (Comunicação com a API):**
+  - Precisará mapear a variável **VITE_API_URL** indicando onde o React vai se alimentar de informações. 
+    - **No EasyPanel:** Preencha como o URL público SSL da primeira máquina na aba *Environment* (Ex: `VITE_API_URL=https://api.dominio.com.br`).
+    - **Rodando no PC (Localhost):** Ao baixar o repositório, crie um arquivo chamado `.env` (ou `.env.local`) solto dentro da pasta `/frontend` e escreva nele `VITE_API_URL=http://localhost:3005`.
+- **Network / Portas:**
+  - O Front finalizado via Nginx repassará o tráfego estático na porta **80**. No painel do EasyPanel exponha as portas diretas pro `80`.
+  - Atrele o domínio interativo base que o cliente ou equipe acessarão (ex: `relatorios.dominio.com.br`).
+
+---
+
+## 💡 Documentação Primária e Ideia Inicial
 
 Criar uma aplicação web que irá gerar um relatório do resultado de vendas de campanhas. Com uma interface leve, bonita e moderna. 
 

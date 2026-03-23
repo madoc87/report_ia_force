@@ -349,7 +349,7 @@ function App() {
     if (!campaignSummary) return;
 
     const summaryText = `${/* Para comentar dentro da backticks pode se fazer dessa forma */''}
-🗂️ Quadro: ${campaignSummary.board}
+${/*🗂️ Quadro: ${campaignSummary.board}*/''}
 📊 Campanha: ${campaignSummary.campaignNames}
 📆 Dt. Envio: ${campaignSummary.dateRange}
 👤 Total de clientes: ${campaignSummary.totalClients}
@@ -372,9 +372,9 @@ function App() {
 📊 Respostas (Respostas/Clientes): ${campaignSummary.responseRate}
 📉 Conversão (Vendas/Clientes): ${campaignSummary.conversionSalesClients}
 🥧 Conversão (Vendas/Respostas): ${campaignSummary.conversionSalesResponses}
-📨 Mensagem enviada:
+${/*📨 Mensagem enviada:*/''}
 
-${normalizedMessage}
+${/*normalizedMessage*/''}
     `.trim();
 
     navigator.clipboard.writeText(summaryText).then(() => {

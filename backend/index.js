@@ -86,7 +86,7 @@ let db;
 (async () => {
   try {
     db = await open({
-      filename: './database.sqlite',
+      filename: process.env.DATABASE_PATH || './database.sqlite',
       driver: sqlite3.Database
     });
     await db.exec(`
