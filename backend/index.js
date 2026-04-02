@@ -7,6 +7,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import cron from 'node-cron';
 
 const app = express();
 const port = process.env.PORT || 3005;
@@ -148,6 +149,24 @@ let db;
       await db.exec(`UPDATE campaigns SET template_enviado = 'Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato' WHERE template_enviado IS NULL`);
     } catch (err) { }
 
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS settings (
+        id TEXT PRIMARY KEY,
+        value TEXT
+      )
+    `);
+
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS sys_logs (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        message TEXT,
+        type TEXT,
+        timestamp DATETIME,
+        is_read INTEGER DEFAULT 0
+      )
+    `);
+
     // User generation or recovery mechanism via .env
     if (ADMIN_EMAIL && ADMIN_PASSWORD) {
       const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
@@ -183,6 +202,7 @@ let db;
     // Start server after DB initialization
     const server = app.listen(port, () => {
       console.log(`Servidor rodando na porta ${port}`);
+      setupCronJob();
     });
 
     server.on('error', (err) => {
@@ -798,6 +818,135 @@ app.delete('/api/users/:id', authenticateToken, authorizeAdmin, async (req, res)
 });
 
 // Usuário escolhe a própria senha nova (forçado ou não)
+// (Aqui viria o restante do arquivo do usuário...)
+// Essa linha serve apenas para referência do chunk caso haja mais conteúdo no final do arquivo orig.
+
+// --- Configurações / Cronjob Endpoints ---
+
+let currentCronJobs = [];
+
+const pushLog = async (title, message, type) => {
+  const id = Math.random().toString(36).substring(7);
+  try {
+    await db.run(
+      'INSERT INTO sys_logs (id, title, message, type, timestamp, is_read) VALUES (?, ?, ?, ?, datetime("now", "localtime"), 0)',
+      [id, title, message, type]
+    );
+  } catch (err) {
+    console.error('Erro ao salvar log no banco:', err);
+  }
+};
+
+const setupCronJob = async () => {
+  try {
+    const row = await db.get('SELECT value FROM settings WHERE id = ?', ['cron_config']);
+    const config = row ? JSON.parse(row.value) : { enabled: true, time: ['00:00'], frequency: '1x por dia' };
+    
+    currentCronJobs.forEach(job => job.stop());
+    currentCronJobs = [];
+
+    if (config.enabled && config.time) {
+      let times = Array.isArray(config.time) ? config.time : [config.time];
+      
+      times.forEach(t => {
+        if (!t) return;
+        const [hour, minute] = t.split(':');
+        const cronExpression = `${minute} ${hour} * * *`; // Roda diarimente no minuto e hora marcados
+        
+        console.log(`[Cron] Agendado para rodar às ${t} (frequencia: ${config.frequency}).`);
+        const job = cron.schedule(cronExpression, async () => {
+          console.log('[Cron] Iniciando atualização de campanhas agendada...');
+          try {
+            const campaigns = await db.all('SELECT * FROM campaigns');
+            let boardId = process.env.BOARD_ID_HABLLA;
+            if (!boardId) {
+              boardId = '682251a6c5a42b757a5dbe79'; // Fallback to IA Manutenção if missing
+            }
+            let updatedCount = 0;
+            let errorCount = 0;
+            for (const camp of campaigns) {
+              if (camp.name) {
+                try {
+                  // Utilizando 'Desconhecido' ou 'Board Agendado' como boardName
+                  await processCampaign(camp.name.trim(), boardId, 'Board Agendado', {}, true);
+                  updatedCount++;
+                } catch (e) {
+                  console.error(`[Cron] Erro ao atualizar a campanha ${camp.name}:`, e.message);
+                  errorCount++;
+                }
+              }
+            }
+            if (errorCount > 0) {
+              await pushLog('Agendamento Automático (Concluído com Alertas)', `${updatedCount} campanhas atualizadas. ${errorCount} erros detalhadas no terminal. (Horário: ${t}).`, 'warning');
+            } else if (updatedCount > 0) {
+              await pushLog('Agendamento Automático (Sucesso)', `As campanhas (${updatedCount}) foram sincronizadas corretamente às ${t}.`, 'success');
+            }
+            console.log(`[Cron] Atualização concluída. ${updatedCount} campanhas atualizadas (Horário agendado: ${t}).`);
+          } catch (error) {
+            console.error('[Cron] Falha ao executar tarefa agendada:', error);
+            await pushLog('Erro Crítico no Agendamento', `O cron falhou com o erro: ${error.message} (Horário: ${t})`, 'error');
+          }
+        });
+        currentCronJobs.push(job);
+      });
+    }
+  } catch (error) {
+    console.error('[Cron] Falha ao configurar a tarefa agendada:', error);
+  }
+};
+
+app.get('/api/settings/cronjob', authenticateToken, authorizeAdmin, async (req, res) => {
+  try {
+    const row = await db.get('SELECT value FROM settings WHERE id = ?', ['cron_config']);
+    const config = row ? JSON.parse(row.value) : { enabled: true, time: ['00:00'], frequency: '1x por dia' };
+    res.status(200).json(config);
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao buscar configurações', error: error.message });
+  }
+});
+
+app.post('/api/settings/cronjob', authenticateToken, authorizeAdmin, async (req, res) => {
+  const { enabled, time, frequency } = req.body;
+  
+  if (!time) {
+    return res.status(400).json({ message: 'O horário é obrigatório.' });
+  }
+
+  try {
+    const config = JSON.stringify({ enabled: !!enabled, time, frequency: frequency || '1x por dia' });
+    await db.run(
+      'INSERT INTO settings (id, value) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
+      ['cron_config', config]
+    );
+    await setupCronJob(); // Reconfigura o cron com o novo horário
+    res.status(200).json({ message: 'Configuração definida com sucesso.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao salvar configuração', error: error.message });
+  }
+});
+
+// Admin system logs/notifications
+app.get('/api/sys-logs', authenticateToken, async (req, res) => {
+  try {
+    const logs = await db.all('SELECT * FROM sys_logs WHERE is_read = 0 ORDER BY timestamp DESC');
+    res.status(200).json(logs);
+  } catch (error) {
+    res.status(500).json([]);
+  }
+});
+
+app.post('/api/sys-logs/mark-read', authenticateToken, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (ids && ids.length > 0) {
+      const placeholders = ids.map(() => '?').join(',');
+      await db.run(`UPDATE sys_logs SET is_read = 1 WHERE id IN (${placeholders})`, ids);
+    }
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false });
+  }
+});
 app.post('/api/change-password', authenticateToken, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   if (!currentPassword || !newPassword) return res.status(400).json({ message: 'Ambas as senhas são exigidas.' });

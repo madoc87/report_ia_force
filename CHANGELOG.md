@@ -546,3 +546,31 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
 
 - **Fallback para Desenvolvimento Local:**
   - Se `runtime-config.json` não existir (ambiente local sem Docker), `loadRuntimeConfig()` cai automaticamente no `import.meta.env.VITE_API_URL` do arquivo `.env` do Vite, mantendo a experiência de desenvolvimento inalterada.
+
+## 35. Reestruturação do Dashboard e Gráfico Funil de Vendas (02/04/2026)
+
+- **Substituição de Gráficos:**
+  - O gráfico original de donut de 'Vendas IA vs Manuais', presente no Dashboard, foi mantido preservado no código mas oculto na visualização (comentado a pedido), facilitando futuras reversões ou recriações.
+  - Implementado o novo gráfico "Funil de Vendas", utilizando o componente dinâmico `FunnelChart` (incorporado do `recharts`).
+- **Composição Visual de Funil:**
+  - O funil é vertical baseando-se em três métricas descendentes acumuladas pelo período selecionado no filtro nativo do Dashboard:
+    1. **Total de Clientes** (Topo Largo).
+    2. **Total de Respostas** (Meio).
+    3. **Vendas Realizadas** (Fundo Estreito, consilidando Vendas IA + Manuais).
+  - Ele utiliza cores fortes em tons azuis/vermelhos em degraus responsivos mantendo um design elegante pro tema Light/Dark.
+
+## 36. Automação de Agendamentos em Segundo Plano (Cronjob e Notificações) (02/04/2026)
+
+- **Instalação do Agendador (Backend):**
+  - Integração oficial da infraestrutura agendadora com a biblioteca assíncrona `node-cron`.
+  - Inserção de tabela dupla no servidor (SQLite: `settings` e `sys_logs`) para persistir customizações de rodagem pelo usuário no disco e preservar os logs gerados na ausência de clientes abertos ou queda do servidor.
+- **Painel Visando Administradores (Dashboard / Settings):**
+  - Implementado formulário central e painel UI no frontend dentro do modulo de Configurações, unicamente destravado para acessos `Admin`.
+  - Traz possibilidades fluidas de configurar o disparador em múltiplas frequências ('1x por dia', '2x por dia', '3x...', etc). Para cada grau de frequência a interface inteligentemente constrói e solicita caixas de horários (`HH:MM`) separadas para execução em paralelo pela máquina Node.
+- **Engenharia Nativa em Estilos (Color Scheme UI):**
+  - Adicionado instrução técnica CSS ao container das requisições via relógios que força os componentes nativos de Data/Hora (Calendar Pickers) do navegador a obedecerem puramente ao tema do sistema: no Dark Mode, reverte toda a janela e ícones do painel de horários nativo pra paleta escura evitando cegamento do usuário e distonamento de layout.
+- **Resiliência Transparente para Missing Env Vars:**
+  - Adicionado proteção passiva (Fallback) na injeção do ambiente no backend: se o administrador esquecer de declarar seu `BOARD_ID_HABLLA` pessoal nas variáveis locais de backend, o próprio script do cronjob detectará e preencherá automaticamente com o ID universal de *IA Manutenção*, evitando estol e interrupção invisível da rotina agendada diária da base.
+- **Polling de Automação Reativo e Feedback Real (`sys_logs`):**
+  - Fim de notificações unicamente "Em Memória". O frontend foi acoplado à base do servidor no Hook nativo, ativando buscas de *interval polling* a cada 60 segundos nos fundos da aplicação React (`App.tsx`). 
+  - Todo resultado de sucesso massivo ou alerta/erros detalhados de disparos gerados de madrugada pelo Cronjob no Backend, são preservados, puxados, notificados e embutidos discretamente na listinha persistente do Sino de Notificações, gerando pop-ups visuais ricos se a aba esteva ativa durante o horário central do Agendamento, unindo completude ao fluxo do gestor.

@@ -216,6 +216,53 @@ function App() {
     fetchData();
   }, [token]);
 
+  // Efeito adicional dedicado apenas à busca de Notificações do Sistema / Logs Backend
+  // Roda logo ao logar e a cada 60s
+  useEffect(() => {
+    if (!token) return;
+    
+    const fetchSysLogs = async () => {
+      try {
+        const response = await apiFetch(`${BASE_URL}/api/sys-logs`);
+        if (!response.ok) return;
+        const logs = await response.json();
+        
+        if (logs.length > 0) {
+           const mappedNotifs: Notification[] = logs.map((l: any) => ({
+               id: l.id,
+               title: l.title,
+               message: l.message,
+               type: l.type,
+               timestamp: new Date(l.timestamp),
+               read: false,
+               isBackend: true 
+           }));
+           
+           setNotifications(prev => {
+               const existingIds = prev.map(p => p.id);
+               const newNotifs = mappedNotifs.filter(n => !existingIds.includes(n.id));
+               return [...newNotifs, ...prev];
+           });
+           
+           // Marca que já puxamos pro frontend, 
+           // para o banco não enviar novamente do backend
+           const ids = logs.map((l: any) => l.id);
+           await apiFetch(`${BASE_URL}/api/sys-logs/mark-read`, {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ ids })
+           });
+        }
+      } catch (err) {
+        // Silencioso
+      }
+    };
+
+    fetchSysLogs();
+    const intervalId = setInterval(fetchSysLogs, 60000);
+    return () => clearInterval(intervalId);
+  }, [token, BASE_URL]);
+
   // Efeito para buscar listas quando o quadro mudar
   /*
   useEffect(() => {

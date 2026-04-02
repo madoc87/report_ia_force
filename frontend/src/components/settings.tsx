@@ -57,6 +57,11 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
         "Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato"
     );
 
+    // Cronjob settings
+    const [cronTimes, setCronTimes] = useState<string[]>(['00:00']);
+    const [cronFreq, setCronFreq] = useState('1x por dia');
+    const [cronLoading, setCronLoading] = useState(false);
+
     const fullMonthNames: Record<string, string> = {
         Jan: 'Janeiro', Fev: 'Fevereiro', Mar: 'Março', Abr: 'Abril', Mai: 'Maio', Jun: 'Junho',
         Jul: 'Julho', Ago: 'Agosto', Set: 'Setembro', Out: 'Outubro', Nov: 'Novembro', Dez: 'Dezembro',
@@ -101,9 +106,28 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
         }
     };
 
+    const fetchCronSettings = async () => {
+        if (!token) return;
+        try {
+            const response = await fetchWithAuth(`${BASE_URL}/api/settings/cronjob`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                if (data.time) {
+                    setCronTimes(Array.isArray(data.time) ? data.time : [data.time]);
+                }
+                if (data.frequency) setCronFreq(data.frequency);
+            }
+        } catch (err) {
+            console.error('Erro ao carregar configurações do cronjob:', err);
+        }
+    };
+
     useEffect(() => {
         if (user?.role === 'admin') {
             fetchUsers();
+            fetchCronSettings();
         }
     }, [user, token]);
 
@@ -134,6 +158,51 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
             setError(err.message);
         } finally {
             setLoading(false);
+        }
+    };
+
+        const handleFreqChange = (val: string) => {
+            setCronFreq(val);
+            const count = parseInt(val.match(/\d+/)?.[0] || '1', 10);
+            setCronTimes(prev => {
+                const newTimes = [...prev];
+                while (newTimes.length < count) newTimes.push('00:00');
+                if (newTimes.length > count) newTimes.length = count;
+                return newTimes;
+            });
+        };
+
+        const handleSaveCron = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setCronLoading(true);
+        try {
+            const response = await fetchWithAuth(`${BASE_URL}/api/settings/cronjob`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ enabled: true, time: cronTimes, frequency: cronFreq })
+            });
+            
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Erro ao salvar configuração do Agendamento.');
+            
+            setNotifications(prev => [{
+                id: Math.random().toString(36).substring(7),
+                title: 'Configurações Salvas',
+                message: 'O agendamento automático de atualização de campanhas foi salvo.',
+                type: 'success',
+                timestamp: new Date(),
+                read: false
+            }, ...prev]);
+            
+            // Pop-up extra solicitado para garantir feedback visual
+            alert("Agendamento Automático configurado com sucesso!");
+        } catch (err: any) {
+            alert(err.message);
+        } finally {
+            setCronLoading(false);
         }
     };
 
@@ -589,6 +658,56 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                 </CardContent>
             </Card>
 
+            <Card>
+                <CardHeader>
+                    <CardTitle>Agendamento Automático (Cronjob)</CardTitle>
+                    <CardDescription>Defina o horário para que o sistema atualize todas as campanhas cadastradas automaticamente.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <form onSubmit={handleSaveCron} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                        <div className="space-y-2 md:col-span-2">
+                            <Label htmlFor="cronFreq">Frequência</Label>
+                            <Select value={cronFreq} onValueChange={handleFreqChange}>
+                                <SelectTrigger id="cronFreq" className="bg-background">
+                                    <SelectValue placeholder="Selecione a frequência" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="1x por dia">1x por dia</SelectItem>
+                                    <SelectItem value="2x por dia">2x por dia</SelectItem>
+                                    <SelectItem value="3x por dia">3x por dia</SelectItem>
+                                    <SelectItem value="4x por dia">4x por dia</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className={`space-y-3 ${cronTimes.length > 2 ? 'md:col-span-4' : 'md:col-span-2'}`}>
+                            <div className={`grid gap-4 ${cronTimes.length > 2 ? 'grid-cols-2 lg:grid-cols-4' : (cronTimes.length === 2 ? 'grid-cols-2' : 'grid-cols-1')}`}>
+                                {cronTimes.map((t, index) => (
+                                    <div key={index} className="space-y-2">
+                                        <Label htmlFor={`cronTime_${index}`}>{cronTimes.length > 1 ? `Horário ${index + 1}` : 'Horário de Execução'} (HH:MM)</Label>
+                                        <Input 
+                                            id={`cronTime_${index}`} 
+                                            type="time" 
+                                            required 
+                                            value={t} 
+                                            onChange={e => {
+                                                const newTimes = [...cronTimes];
+                                                newTimes[index] = e.target.value;
+                                                setCronTimes(newTimes);
+                                            }} 
+                                            className="bg-background [color-scheme:light] dark:[color-scheme:dark]" 
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="md:col-span-1 border-t md:border-t-0 pt-4 md:pt-0 mt-2 md:mt-0 items-end flex pb-[2px]">
+                            <Button type="submit" disabled={cronLoading} className="w-full font-bold">
+                                {cronLoading ? 'Salvando...' : 'Salvar'}
+                            </Button>
+                        </div>
+                    </form>
+                </CardContent>
+            </Card>
 
         </div>
     );
