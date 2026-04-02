@@ -103,7 +103,7 @@ function App() {
   const [activeTab, setActiveTab] = useState(() => {
     const savedUser = localStorage.getItem('user');
     const parsedUser = savedUser ? JSON.parse(savedUser) : null;
-    return parsedUser?.role === 'user' ? 'dashboard' : 'relatorios';
+    return (parsedUser?.role === 'user' || parsedUser?.role === 'gestor') ? 'dashboard' : 'relatorios';
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -721,6 +721,7 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
         localStorage.setItem('user', JSON.stringify(newUser));
         setToken(newToken);
         setUser(newUser);
+        setActiveTab((newUser.role === 'user' || newUser.role === 'gestor') ? 'dashboard' : 'relatorios');
         if (newUser.theme) setTheme(newUser.theme as "light" | "dark" | "system");
       }} />
     );
@@ -735,6 +736,7 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
           localStorage.setItem('user', JSON.stringify(updatedUser));
           setToken(newToken);
           setUser(updatedUser);
+          setActiveTab((updatedUser.role === 'user' || updatedUser.role === 'gestor') ? 'dashboard' : 'relatorios');
           if (updatedUser.theme) setTheme(updatedUser.theme as "light" | "dark" | "system");
         }}
       />
