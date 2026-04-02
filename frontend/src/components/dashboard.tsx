@@ -437,7 +437,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
           </CardContent>
         </Card>
 
-        {/* Distribution */}
+        {/* Distribuição IA vs Manual (Mantido comentado para possível uso futuro)
         <Card className="border-none shadow-sm">
           <CardHeader>
             <CardTitle className="text-lg">Distribuição IA vs Manual</CardTitle>
@@ -477,6 +477,50 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
                 <Legend verticalAlign="bottom" height={36} />
               </PieChart>
             </ResponsiveContainer>
+          </CardContent>
+        </Card>
+        */}
+
+        {/* Funil de Vendas */}
+        <Card className="border-none shadow-sm bg-card text-card-foreground">
+          <CardHeader>
+            <CardTitle className="text-lg">Funil de Vendas</CardTitle>
+          </CardHeader>
+          <CardContent className="h-[300px] flex flex-col items-center justify-center pb-8 pt-0 px-6">
+            <div className="w-full max-w-[280px] h-full flex flex-col gap-[2px] items-center justify-center">
+              {/* Top - Clientes */}
+              <div 
+                className="w-full relative flex-1 bg-indigo-500 text-white flex flex-col items-center justify-center transition-all hover:brightness-110 shadow-sm"
+                style={{ clipPath: 'polygon(0 0, 100% 0, 85% 100%, 15% 100%)' }}
+              >
+                <div className="flex flex-col items-center z-10 pt-1">
+                  <span className="text-2xl font-bold leading-none">{totals.clients}</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-indigo-100 mt-1">Clientes</span>
+                </div>
+              </div>
+              
+              {/* Middle - Respostas */}
+              <div 
+                className="w-[70%] relative flex-1 bg-indigo-400 text-white flex flex-col items-center justify-center transition-all hover:brightness-110 shadow-sm"
+                style={{ clipPath: 'polygon(0 0, 100% 0, 78.6% 100%, 21.4% 100%)' }}
+              >
+                <div className="flex flex-col items-center z-10">
+                  <span className="text-xl font-bold leading-none">{totals.responses}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-indigo-100 mt-1">Respostas</span>
+                </div>
+              </div>
+
+              {/* Bottom - Vendas */}
+              <div 
+                className="w-[40%] relative flex-1 bg-emerald-500 text-white flex flex-col items-center justify-center transition-all hover:brightness-110 shadow-sm"
+                style={{ clipPath: 'polygon(0 0, 100% 0, 62.5% 100%, 37.5% 100%)' }}
+              >
+                <div className="flex flex-col items-center z-10 pb-1">
+                  <span className="text-lg font-bold leading-none">{totals.sales}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-100 mt-1">Vendas</span>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
