@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend, AreaChart, Area
+  AreaChart, Area
 } from 'recharts';
 import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Notification } from '@/App';
@@ -64,6 +64,18 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     const fetchDashboardData = async () => {
       try {
         const token = localStorage.getItem('token');
+        if (token) {
+          try {
+            const payload = JSON.parse(window.atob(token.split('.')[1]));
+            if (payload.exp * 1000 <= Date.now()) {
+              onLogout?.();
+              throw new Error('Sessão expirada. Por favor, faça login novamente.');
+            }
+          } catch (e: any) {
+             if (e && e.message && e.message.includes('Sessão expirada')) throw e;
+          }
+        }
+
         const response = await fetch(`${getBaseUrl()}/api/dashboard-data`, {
           headers: {
             ...(token ? { 'Authorization': `Bearer ${token}` } : {})
@@ -411,7 +423,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
             </div>
           </CardHeader>
           <CardContent className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <AreaChart data={filteredData}>
                 <defs>
                   <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">

@@ -4,15 +4,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Bot, Lock, Mail } from 'lucide-react';
+import { Lock, Mail } from 'lucide-react';
 import { ModeToggle } from '@/components/mode-toggle';
 
-// Add type declaration for Vite's import.meta.env
-declare global {
-    interface ImportMeta {
-        env: Record<string, string>;
-    }
-}
+
+import logoImg from '@/assets/dash-report.svg';
 
 interface User {
     id: number;
@@ -45,7 +41,7 @@ export function Login({ onLogin }: LoginProps) {
 
         try {
             const BASE_URL = getBaseUrl();
-            
+
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 10000);
 
@@ -85,8 +81,8 @@ export function Login({ onLogin }: LoginProps) {
             </div>
             <Card className="w-full max-w-md border-border bg-card text-card-foreground shadow-2xl">
                 <CardHeader className="space-y-3 pb-6 flex flex-col items-center">
-                    <div className="w-16 h-16 bg-primary/20 rounded-2xl flex items-center justify-center mb-2 shadow-inner">
-                        <Bot className="w-8 h-8 text-primary" />
+                    <div className="w-16 h-16 bg-background/80 rounded-2xl flex items-center justify-center mb-2 shadow-inner">
+                        <img src={logoImg} alt="Logo" className="w-10 h-10 object-contain" />
                     </div>
                     <CardTitle className="text-3xl font-bold tracking-tight text-center">Report IA Force</CardTitle>
                     <CardDescription className="text-muted-foreground text-center text-sm max-w-xs">

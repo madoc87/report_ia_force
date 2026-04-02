@@ -1,6 +1,7 @@
 import { LayoutDashboard, FileText, ShoppingCart, Package, Users, BarChart3, Settings, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ModeToggle } from '@/components/mode-toggle';
+import logoImg from '@/assets/dash-report.svg';
 
 interface SidebarProps {
   activeTab: string;
@@ -44,7 +45,7 @@ export function Sidebar({ activeTab, setActiveTab, isOpen, onClose, user, onLogo
         <div className="p-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 flex items-center justify-center">
-              <img src="/src/assets/dash-report.svg" alt="logo Report IA Force" />
+              <img src={logoImg} alt="logo Report IA Force" />
             </div>
             <span className="text-xl font-bold">Report IA Force</span>
           </div>

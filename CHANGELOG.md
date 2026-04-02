@@ -574,3 +574,20 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
 - **Polling de Automação Reativo e Feedback Real (`sys_logs`):**
   - Fim de notificações unicamente "Em Memória". O frontend foi acoplado à base do servidor no Hook nativo, ativando buscas de *interval polling* a cada 60 segundos nos fundos da aplicação React (`App.tsx`). 
   - Todo resultado de sucesso massivo ou alerta/erros detalhados de disparos gerados de madrugada pelo Cronjob no Backend, são preservados, puxados, notificados e embutidos discretamente na listinha persistente do Sino de Notificações, gerando pop-ups visuais ricos se a aba esteva ativa durante o horário central do Agendamento, unindo completude ao fluxo do gestor.
+
+## 37. Estabilidade de Produção, Reparos de Layout e Resolução de Erros de Build (02/04/2026)
+
+- **Correção da Identidade Visual (Logo e Imports):**
+  - O ícone provisório do Robô (`Bot` do Lucide) na tela de Login e as instâncias de URLs absolutas estáticas na Sidebar (`/src/assets/...`) foram completamente reescritos. 
+  - Implantado o padrão correto e oficial de imports em cadeia com bundler no Vite usando a logo vetorizada oficial. 
+  - Adicionado módulo de controle TypeScript nativo contornando limitações estritas de extensões SVGs durante o empacotamento em produção.
+- **Bloqueio de Falsos Erros (Erro 401 Console):**
+  - Os mecanismos primários de captação isolada das APis e Gráficos (`apiFetch` / `Dashboard`) absorveram uma inteligência reativa de interceptação primária de Expiração antes de atingir o backend.
+  - Inclusão do decoder `window.atob(token)` garantindo que logs assustadores ou inúteis vermelhos alertando "401 Unauthorized" não decolem no console de usuários em casos normais de limites de acesso e Sessões mortas.
+- **Proteção e Controle Analítico do Recharts:**
+  - Mitigado permanentemente o erro visual assíncrono de eixos sem largura (`width(-1)`) reportados em navegadores limpos aplicando contedores de blocos atrelados com `minWidth={0} minHeight={0}` na renderização original dos componentes pais de gráficos em Área.
+- **Quebras de Container Responsivos em Smartphones:**
+  - Realocado e refatorado as raízes das Tabelas grandes transbordantes e popovers do Filtro em blocos de escoamento atrelados aos grids centrais (`overflow-x-auto w-full max-w-full`). Permite arrastos pelo dedo no `App.tsx` para tabelas imensas de IDs e trancamento com pretexto `min-w-0` em listas, cessando inteiramente as rupturas laterais desproporcionais vistas em pequenas telas do Frontend.
+- **Triagem Completa de Deploy para o EasyPanel:**
+  - Depuração intensiva dos travamentos em servidores estritos (Saídas com Exit Code 2).
+  - Remoções e sanções completadas em dezenas de referências inutilizadas de bibliotecas fantasmas não em vigor e declarações globais recursivas sujas de tipagem que negavam a confirmação segura do transpilador CI da pipeline do Docker do Node (`npm run build`).

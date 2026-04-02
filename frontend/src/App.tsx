@@ -150,6 +150,20 @@ function App() {
   // Custom fetch wrapper para injetar o token e tratar expirações (401/403)
   const apiFetch = async (url: string, options: RequestInit = {}) => {
     const currentToken = localStorage.getItem('token');
+    
+    if (currentToken) {
+      try {
+        const payload = JSON.parse(window.atob(currentToken.split('.')[1]));
+        if (payload.exp * 1000 <= Date.now()) {
+          handleLogout();
+          throw new Error('Sessão expirada. Por favor, faça login novamente.');
+        }
+      } catch (e: any) {
+        if (e && e.message && e.message.includes('Sessão expirada')) throw e;
+        // Ignora erros de decodificação de token inválido ou formato inesperado
+      }
+    }
+
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -972,28 +986,30 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
                   </CardHeader>
                   <CardContent>
                     {cardList.length > 0 ? (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>ID do Cartão</TableHead>
-                            <TableHead>Nome</TableHead>
-                            <TableHead>Campanha</TableHead>
-                            <TableHead>Data de Criação</TableHead>
-                            <TableHead>Dono do cartão</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {cardList.map((item) => (
-                            <TableRow key={item.id}>
-                              <TableCell>{item.id}</TableCell>
-                              <TableCell>{item.name}</TableCell>
-                              <TableCell>{item.campaign || "-"}</TableCell>
-                              <TableCell>{new Date(item.created_at).toLocaleDateString()}</TableCell>
-                              <TableCell>{item.user || "-"}</TableCell>
+                      <div className="overflow-x-auto w-full max-w-full">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>ID do Cartão</TableHead>
+                              <TableHead>Nome</TableHead>
+                              <TableHead>Campanha</TableHead>
+                              <TableHead>Data de Criação</TableHead>
+                              <TableHead>Dono do cartão</TableHead>
                             </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                          </TableHeader>
+                          <TableBody>
+                            {cardList.map((item) => (
+                              <TableRow key={item.id}>
+                                <TableCell>{item.id}</TableCell>
+                                <TableCell>{item.name}</TableCell>
+                                <TableCell>{item.campaign || "-"}</TableCell>
+                                <TableCell>{new Date(item.created_at).toLocaleDateString()}</TableCell>
+                                <TableCell>{item.user || "-"}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
                     ) : (
                       <p>Nenhum card encontrado para este filtro.</p>
                     )}

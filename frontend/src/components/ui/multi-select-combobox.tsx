@@ -49,10 +49,10 @@ export function MultiSelectCombobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className={cn("w-full justify-between", className)}
+          className={cn("w-full justify-between min-w-0 flex-1", className)}
           style={{ height: 'auto', minHeight: '2.5rem' }}
         >
-          <div className="flex gap-1 flex-wrap">
+          <div className="flex gap-1 flex-wrap min-w-0 flex-1">
             {selected.length === 0 && placeholder}
             {selected.map((item) => {
               const tag = options.find((opt) => opt.id === item);
