@@ -591,3 +591,146 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
 - **Triagem Completa de Deploy para o EasyPanel:**
   - Depuração intensiva dos travamentos em servidores estritos (Saídas com Exit Code 2).
   - Remoções e sanções completadas em dezenas de referências inutilizadas de bibliotecas fantasmas não em vigor e declarações globais recursivas sujas de tipagem que negavam a confirmação segura do transpilador CI da pipeline do Docker do Node (`npm run build`).
+
+## 38. Implementação de Testes Automatizados — Backend e Frontend (06/04/2026)
+
+- **Objetivo e Motivação:**
+  - Criação de uma suíte completa de testes automatizados (unitários, integração e componentes) para garantir que todas as funcionalidades da aplicação continuem ativas mesmo com futuras atualizações e refatorações.
+  - O framework permite detectar regressões rapidamente antes de fazer deploy, reduzindo riscos de bugs em produção.
+
+- **Refatoração do Backend (`index.js`):**
+  - Extração da inicialização do banco de dados para a função `initializeDatabase(dbPath)`, que aceita `:memory:` para testes.
+  - O servidor (`app.listen`) agora só inicia quando `NODE_ENV !== 'test'`, garantindo isolamento total nos testes sem conflito de portas.
+  - Exportação das funções `app`, `initializeDatabase`, `calculateSummary` e `aggregateSummaries` para uso direto pelos arquivos de teste.
+  - **Nenhuma alteração na lógica de negócio ou segurança** — apenas reestruturação interna para testabilidade.
+
+- **Backend — Testes com Jest + Supertest:**
+  - **Configuração:**
+    - Criado `jest.config.js` com suporte a ESM (ES Modules).
+    - Criado `__tests__/helpers/setup.js` com banco SQLite em memória, mock de usuários (admin, user, gestor) e geração de tokens JWT.
+  - **Testes Unitários** — `__tests__/unit/calculateSummary.test.js` (13 testes):
+    - Cálculo de clientes únicos, contagem de vendas IA e manuais.
+    - Contagem de mensagens não recebidas (status `lost` + lista + tag específica).
+    - Cálculo de respostas Hablla (excluindo listas de tentativa de contato).
+    - Cálculo de custo total `(phones - notReceived) * 0.1`.
+    - Formatação de `dateRange` (data única vs intervalo).
+    - Função `aggregateSummaries`: soma de valores absolutos, recálculo de taxas derivadas, handling de arrays vazios.
+  - **Testes de Integração — Autenticação** — `__tests__/integration/auth.test.js` (8 testes):
+    - Login com credenciais válidas retorna token JWT e dados do usuário.
+    - Login com email inexistente ou senha errada retorna 401.
+    - Login sem campos obrigatórios retorna 400.
+    - Flag `force_password_change` para novos usuários.
+    - Middleware `authenticateToken`: rejeição sem token (401), token inválido (403), token expirado (403).
+    - Troca de senha: sucesso com senha atual correta, erro com senha incorreta, erro sem campos.
+  - **Testes de Integração — Campanhas** — `__tests__/integration/campaigns.test.js` (8 testes):
+    - CRUD completo: listar, criar, atualizar, deletar.
+    - Controle de acesso: admin pode criar/deletar, user e gestor recebem 403.
+    - Validações: nome obrigatório, hora em formato inválido, auto-numeração.
+  - **Testes de Integração — Usuários** — `__tests__/integration/users.test.js` (9 testes):
+    - CRUD completo: listar (sem `password_hash`), criar, deletar.
+    - Email duplicado retorna 400. Campos obrigatórios validados.
+    - Proteção contra auto-exclusão (admin não pode deletar a si mesmo).
+    - Reset de senha pelo admin. Atualização de tema (dark/light/system).
+    - Novos usuários criados com `force_password_change = 1`.
+  - **Testes de Integração — Settings/System** — `__tests__/integration/settings.test.js` (7 testes):
+    - Health check (`GET /test`) retorna status ok sem autenticação.
+    - Configuração de cronjob: leitura de config padrão, salvamento, persistência na releitura.
+    - Logs do sistema: listagem, marcação como lidos.
+    - Dashboard data: retorno com autenticação, rejeição sem token.
+  - **Total Backend: 5 test suites, ~45 testes.**
+  - **Dependências adicionadas (devDependencies):** `jest`, `supertest`, `cross-env`.
+
+- **Frontend — Testes com Vitest + React Testing Library:**
+  - **Configuração:**
+    - Criado `vitest.config.ts` com ambiente jsdom, suporte ao alias `@/` e referência ao setup global.
+    - Criado `src/__tests__/setup.ts` com polyfills necessários para simular o navegador:
+      - `ResizeObserver` (usado por Recharts e Radix UI).
+      - `matchMedia` (usado pelo ThemeProvider).
+      - `IntersectionObserver` (usado por componentes lazy).
+      - Mock de `import.meta.env` para `VITE_API_URL`.
+  - **Testes Unitários — Utilitários** — `src/__tests__/unit/utils.test.ts` (5 testes):
+    - `cn()`: combinação de classes, resolução de conflitos Tailwind, valores condicionais, valores falsy.
+  - **Testes Unitários — Config** — `src/__tests__/unit/config.test.ts` (4 testes):
+    - `getBaseUrl()`: fallback para localhost quando config não carregada.
+    - `loadRuntimeConfig()`: uso de `runtime-config.json`, handling de URL vazia, cache (não faz fetch 2x).
+  - **Testes de Componente — Login** — `src/__tests__/components/login.test.tsx` (9 testes):
+    - Renderização: título, descrição, campos de email e senha, labels.
+    - Interação: botão "Acessar Sistema" habilitado, texto "Autenticando..." ao submeter.
+    - API: erro quando retorna 401, chamada de `onLogin` com token e user no sucesso.
+  - **Testes de Componente — Sidebar** — `src/__tests__/components/sidebar.test.tsx` (11 testes):
+    - Visibilidade por role: Dashboard/Relatórios para todos, Configurações só para admin.
+    - Menus admin-only ocultos para user e gestor.
+    - Interação: click chama `setActiveTab`, click chama `onClose` (mobile), botão Sair funcional.
+    - Menus desabilitados (Vendas, Produtos) não disparam navegação.
+  - **Testes de Componente — Header** — `src/__tests__/components/header.test.tsx` (10 testes):
+    - Renderização: título dinâmico, nome e email do usuário, avatar com inicial.
+    - Estado vazio: "Carregando..." quando user não fornecido.
+    - Notificações: badge com contagem de não lidas, sem badge com 0 não lidas.
+    - Data atual formatada em pt-BR.
+  - **Testes de Componente — Dashboard** — `src/__tests__/components/dashboard.test.tsx` (13 testes):
+    - Loading state: "Carregando Dashboard..." durante fetch.
+    - StatsCards: Valor Vendido, Número de Vendas, Ticket Médio, Clientes, Custo Total.
+    - Funil de Vendas: 3 níveis (Clientes → Respostas → Vendas), totalizações.
+    - Seção de Médias: conversão vendas, conversão IA, média vendas/faturamento/custos.
+    - Tabela de Campanhas: cabeçalhos, nomes, Disparo/Mês.
+    - Filtros: Modo de Filtro, filtragem de campanhas "Não enviado".
+    - Gráfico "Evolução de Vendas".
+    - Resposta vazia da API (não crasha, mostra zeros).
+  - **Total Frontend: 6 test suites, 52 testes.**
+  - **Dependências adicionadas (devDependencies):** `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/jest-dom`, `@testing-library/user-event`.
+
+- **Arquivos Criados:**
+  - `backend/jest.config.js`
+  - `backend/__tests__/helpers/setup.js`
+  - `backend/__tests__/unit/calculateSummary.test.js`
+  - `backend/__tests__/integration/auth.test.js`
+  - `backend/__tests__/integration/campaigns.test.js`
+  - `backend/__tests__/integration/users.test.js`
+  - `backend/__tests__/integration/settings.test.js`
+  - `frontend/vitest.config.ts`
+  - `frontend/src/__tests__/setup.ts`
+  - `frontend/src/__tests__/unit/utils.test.ts`
+  - `frontend/src/__tests__/unit/config.test.ts`
+  - `frontend/src/__tests__/components/login.test.tsx`
+  - `frontend/src/__tests__/components/sidebar.test.tsx`
+  - `frontend/src/__tests__/components/header.test.tsx`
+  - `frontend/src/__tests__/components/dashboard.test.tsx`
+
+- **Arquivos Modificados:**
+  - `backend/index.js` — Exportação de `app`, `initializeDatabase`, `calculateSummary`, `aggregateSummaries`.
+  - `backend/package.json` — Script `test` com cross-env e devDependencies.
+  - `frontend/package.json` — Scripts `test` e `test:watch` com Vitest e devDependencies.
+
+- **Como Usar os Testes no Dia a Dia:**
+  ```bash
+  # Rodar TODOS os testes do backend (uma vez)
+  cd backend
+  npm test
+
+  # Rodar TODOS os testes do frontend (uma vez)
+  cd frontend
+  npm test
+
+  # Modo Watch — re-executa automaticamente ao salvar arquivos (ideal durante desenvolvimento)
+  cd frontend
+  npm run test:watch
+
+  # Fluxo recomendado ANTES de cada push/deploy:
+  cd backend && npm test && cd ../frontend && npm test && npm run build
+  ```
+
+- **Segurança e Build de Produção:**
+  - Todas as bibliotecas de teste são `devDependencies` — **não são incluídas no build de produção**.
+  - O Dockerfile usa `npm install --omit=dev`, garantindo que jest, vitest, testing-library etc. nunca entram no container final.
+  - A exportação do `app` no `index.js` é um recurso interno de módulos Node.js — não expõe endpoints nem cria riscos de segurança.
+  - `npm run build` do frontend continua funcionando normalmente (verificado ✅).
+
+## 39. Tratamento Pró-ativo de Falhas na Integração Hablla (07/04/2026)
+
+- **Resiliência do Dashboard (Graceful Degradation):**
+  - Isoladas as chamadas de inicialização do frontend em `App.tsx`. Anteriormente a requisição de busca de etiquetas (`tags`) da API da Hablla bloqueava o carregamento das campanhas locais (`campaigns`) caso houvesse indisponibilidade ou Token expirado. 
+  - A lógica agora transcorre em blocos isolados (`Promise` ou `try/catch` paralelos), permitindo que se a Hablla falhar, o React avise na interface (Alert) mas ainda carregue a listagem do MySQL/SQLite garantindo que abas de "Dashboard", filtros e menu de "Configurações" funcionem em perfeito estado exibindo as campanhas do histórico sem quebrar a tela (Remoção do status "Unknow").
+
+- **Precisão nos Alertas de Integração (Ux Feedback):**
+  - Refatorados os gatilhos dos botões *Gerar Relatório*, *Buscar*, *Atualizar* de campanhas e a montagem principal. 
+  - Os captadores deixaram de reportar erros vagos ("Verifique se o servidor está rodando") em caso de 4xx/5xx da Hablla, para dissecarem de fato o corpo do erro retornado pelo `backend/index.js`, apontando à vista qual foi o real motivo de queda atestada como (ex: *"API Hablla (Tags): Invalid workspace token"*). Essa tratativa agiliza o processo de troubleshooting sem a necessidade de acessar os painéis de log do Back-end.

@@ -25,3 +25,5 @@ yarn-error.log*
 
 # Temporary files
 /temp
+implementation_plan.md
+implementation_plan_automation_tests_Report-IA-Force.md

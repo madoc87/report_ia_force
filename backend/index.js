@@ -84,136 +84,143 @@ app.post('/api/login', async (req, res) => {
 
 // --- SQLite Setup ---
 let db;
-(async () => {
+
+// Função de inicialização do banco - exportada para uso em testes
+const initializeDatabase = async (dbPath) => {
+  db = await open({
+    filename: dbPath || process.env.DATABASE_PATH || './database.sqlite',
+    driver: sqlite3.Database
+  });
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS campaign_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_name TEXT NOT NULL,
+      board_id TEXT,
+      board_name TEXT,
+      date_range TEXT,
+      total_clients INTEGER,
+      total_phones INTEGER,
+      total_hablla_responses INTEGER,
+      sales_ia INTEGER,
+      sales_manual INTEGER,
+      not_received_msg INTEGER,
+      total_cost TEXT,
+      average_sold TEXT,
+      response_rate TEXT,
+      conversion_sales_clients TEXT,
+      conversion_sales_responses TEXT,
+      last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(campaign_name, board_id)
+    )
+  `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT DEFAULT 'user',
+      force_password_change INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Atualiza tabela antiga para adicionar coluna de tema, caso não exista
   try {
-    db = await open({
-      filename: process.env.DATABASE_PATH || './database.sqlite',
-      driver: sqlite3.Database
-    });
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS campaign_summaries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        campaign_name TEXT NOT NULL,
-        board_id TEXT,
-        board_name TEXT,
-        date_range TEXT,
-        total_clients INTEGER,
-        total_phones INTEGER,
-        total_hablla_responses INTEGER,
-        sales_ia INTEGER,
-        sales_manual INTEGER,
-        not_received_msg INTEGER,
-        total_cost TEXT,
-        average_sold TEXT,
-        response_rate TEXT,
-        conversion_sales_clients TEXT,
-        conversion_sales_responses TEXT,
-        last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(campaign_name, board_id)
-      )
-    `);
+    await db.exec(`ALTER TABLE users ADD COLUMN theme TEXT DEFAULT 'dark'`);
+  } catch (err) { }
 
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT DEFAULT 'user',
-        force_password_change INTEGER DEFAULT 1,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      date TEXT,
+      time TEXT,
+      reference_month TEXT,
+      number INTEGER,
+      template_enviado TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
-    // Atualiza tabela antiga para adicionar coluna de tema, caso não exista
+  // Migrate template_enviado
+  try {
+    await db.exec(`ALTER TABLE campaigns ADD COLUMN template_enviado TEXT`);
+    await db.exec(`UPDATE campaigns SET template_enviado = 'Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato' WHERE template_enviado IS NULL`);
+  } catch (err) { }
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      id TEXT PRIMARY KEY,
+      value TEXT
+    )
+  `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS sys_logs (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      message TEXT,
+      type TEXT,
+      timestamp DATETIME,
+      is_read INTEGER DEFAULT 0
+    )
+  `);
+
+  return db;
+};
+
+// Inicialização do servidor em produção (não roda em testes)
+if (process.env.NODE_ENV !== 'test') {
+  (async () => {
     try {
-      await db.exec(`ALTER TABLE users ADD COLUMN theme TEXT DEFAULT 'dark'`);
-    } catch (err) { }
+      await initializeDatabase();
 
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS campaigns (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        date TEXT,
-        time TEXT,
-        reference_month TEXT,
-        number INTEGER,
-        template_enviado TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+      // User generation or recovery mechanism via .env
+      if (ADMIN_EMAIL && ADMIN_PASSWORD) {
+        const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+        const existingAdmin = await db.get('SELECT id FROM users WHERE email = ?', [ADMIN_EMAIL]);
 
-    // Migrate template_enviado
-    try {
-      await db.exec(`ALTER TABLE campaigns ADD COLUMN template_enviado TEXT`);
-      await db.exec(`UPDATE campaigns SET template_enviado = 'Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato' WHERE template_enviado IS NULL`);
-    } catch (err) { }
-
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS settings (
-        id TEXT PRIMARY KEY,
-        value TEXT
-      )
-    `);
-
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS sys_logs (
-        id TEXT PRIMARY KEY,
-        title TEXT,
-        message TEXT,
-        type TEXT,
-        timestamp DATETIME,
-        is_read INTEGER DEFAULT 0
-      )
-    `);
-
-    // User generation or recovery mechanism via .env
-    if (ADMIN_EMAIL && ADMIN_PASSWORD) {
-      const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-      const existingAdmin = await db.get('SELECT id FROM users WHERE email = ?', [ADMIN_EMAIL]);
-
-      if (existingAdmin) {
-        // Recover/Update password and role
-        await db.run('UPDATE users SET password_hash = ?, role = "admin", force_password_change = 0 WHERE email = ?', [adminHash, ADMIN_EMAIL]);
-        console.log(`[Segurança] Acesso Admin recuperado: A conta '${ADMIN_EMAIL}' foi detectada e redefinida com a senha contida no arquivo .env.`);
+        if (existingAdmin) {
+          await db.run('UPDATE users SET password_hash = ?, role = "admin", force_password_change = 0 WHERE email = ?', [adminHash, ADMIN_EMAIL]);
+          console.log(`[Segurança] Acesso Admin recuperado: A conta '${ADMIN_EMAIL}' foi detectada e redefinida com a senha contida no arquivo .env.`);
+        } else {
+          await db.run(
+            'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
+            ['Admin do Sistema', ADMIN_EMAIL, adminHash, 'admin', 0]
+          );
+          console.log(`[Segurança] Usuário Admin gerado a partir do arquivo .env: ${ADMIN_EMAIL}`);
+        }
       } else {
-        // Create new
-        await db.run(
-          'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
-          ['Admin do Sistema', ADMIN_EMAIL, adminHash, 'admin', 0]
-        );
-        console.log(`[Segurança] Usuário Admin gerado a partir do arquivo .env: ${ADMIN_EMAIL}`);
+        const userCount = await db.get('SELECT COUNT(*) as count FROM users');
+        if (userCount.count === 0) {
+          const defaultPasswordHash = await bcrypt.hash(APP_PASSWORD || 'admin123', 10);
+          await db.run(
+            'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
+            ['Admin', 'admin@mf.com', defaultPasswordHash, 'admin', 0]
+          );
+          console.log('Nenhuma conta .env detectada. Usuário admin gerado por padrão: admin@mf.com / admin123');
+        }
       }
-    } else {
-      // Create default admin user if no users exist (fallback)
-      const userCount = await db.get('SELECT COUNT(*) as count FROM users');
-      if (userCount.count === 0) {
-        const defaultPasswordHash = await bcrypt.hash(APP_PASSWORD || 'admin123', 10);
-        await db.run(
-          'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
-          ['Admin', 'admin@mf.com', defaultPasswordHash, 'admin', 0]
-        );
-        console.log('Nenhuma conta .env detectada. Usuário admin gerado por padrão: admin@mf.com / admin123');
-      }
+
+      console.log('SQLite database initialized.');
+
+      const server = app.listen(port, () => {
+        console.log(`Servidor rodando na porta ${port}`);
+        setupCronJob();
+      });
+
+      server.on('error', (err) => {
+        console.error('Erro no servidor express:', err);
+        process.exit(1);
+      });
+
+    } catch (error) {
+      console.error('Failed to initialize SQLite:', error);
     }
-
-    console.log('SQLite database initialized.');
-
-    // Start server after DB initialization
-    const server = app.listen(port, () => {
-      console.log(`Servidor rodando na porta ${port}`);
-      setupCronJob();
-    });
-
-    server.on('error', (err) => {
-      console.error('Erro no servidor express:', err);
-      process.exit(1);
-    });
-
-  } catch (error) {
-    console.error('Failed to initialize SQLite:', error);
-  }
-})();
+  })();
+}
 
 const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
   const url = new URL(`${HABLLA_API_URL}${endpoint}`);
@@ -990,3 +997,6 @@ app.put('/api/users/theme', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Erro no servidor.', error: error.message });
   }
 });
+
+// --- Exportações para testes ---
+export { app, initializeDatabase, calculateSummary, aggregateSummaries };
