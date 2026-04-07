@@ -204,10 +204,13 @@ function App() {
     if (!token) return; // Prevent fetching while not authenticated
 
     const fetchData = async () => {
+      let errors: string[] = [];
+
       try {
         const tagsResponse = await apiFetch(`${BASE_URL}/api/tags`);
         if (!tagsResponse.ok) {
-          throw new Error('Falha de autorização ou erro no servidor ao buscar tags.');
+          const errorData = await tagsResponse.json().catch(() => ({}));
+          throw new Error(`API Hablla (Tags): ${errorData.error || errorData.message || tagsResponse.statusText}`);
         }
         const tagsData: Tag[] = await tagsResponse.json();
         if (Array.isArray(tagsData)) {
@@ -215,15 +218,29 @@ function App() {
         } else if ((tagsData as any).results && Array.isArray((tagsData as any).results)) {
           setTags((tagsData as any).results);
         }
+      } catch (error: any) {
+        errors.push(error.message || 'Erro ao buscar tags da Hablla.');
+        console.error('Error fetching tags:', error);
+      }
 
+      try {
         const campaignsResponse = await apiFetch(`${BASE_URL}/api/campaigns`);
         if (campaignsResponse.ok) {
           const campaignsDataJson = await campaignsResponse.json();
           setCampaignsData(campaignsDataJson);
+        } else {
+          const errorData = await campaignsResponse.json().catch(() => ({}));
+          throw new Error(`Banco local (Campanhas): ${errorData.error || errorData.message || campaignsResponse.statusText}`);
         }
-      } catch (error) {
-        setError('Falha ao buscar dados do servidor. Verifique se o servidor está rodando.');
-        console.error('Error fetching data:', error);
+      } catch (error: any) {
+        errors.push(error.message || 'Erro ao buscar campanhas.');
+        console.error('Error fetching campaigns:', error);
+      }
+
+      if (errors.length > 0) {
+        setError(errors.join(' | '));
+      } else {
+        setError(null); // Limpar apenas se não houve erros
       }
     };
 
@@ -360,8 +377,8 @@ function App() {
 
     const response = await apiFetch(`${baseUrl}?${params.toString()}`);
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || 'Falha na busca por cartões.');
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || errorData.message || 'Falha na busca por cartões.');
     }
     return response.json();
   };
@@ -493,8 +510,8 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
 
       const response = await apiFetch(`${baseUrl}?${params.toString()}`);
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Falha ao gerar resumo da campanha.');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.message || 'Falha ao gerar resumo da campanha.');
       }
 
       const summaryData: CampaignSummary = await response.json();
@@ -533,8 +550,8 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Falha ao atualizar campanha.');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.message || 'Falha ao atualizar campanha.');
       }
 
       const summaryData: CampaignSummary = await response.json();
