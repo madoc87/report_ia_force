@@ -743,3 +743,16 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
   - Implementada a função de comissionamento via `getCommercialMonth`, realocando campanhas disparadas entre o dia **21 de um mês até o dia 20 do mês seguinte** para serem computadas nas métricas do mês posterior (ex: Campanhas do dia `25/03` agora refletem os resultados de rentabilidade em `Abril`).
 - **Novo Seletor (UI):**
   - Foi adicionado um dropdown central "Tipo de Mês", condicionado apenas para quando as opções de visualização mensal (*Por Mês de Disparo* ou *Por Mês*) estão ativas, permitindo alternância ágil entre o modo `Mês Fiscal` e `Mês Comercial` sem perder a visão segmentada por mês do painel. Todos os gráficos reagem em cascata a essa formatação.
+
+## 41. Gerenciamento e Versionamento do Banco de Dados (04/05/2026)
+
+- **Rotinas de Exportação e Importação (Backend):**
+  - **Exportação (`GET /api/database/export`):** Permite download direto do arquivo base atual (`database.sqlite`). O sistema formata a data no fuso brasileiro e o nome da aplicação (`database_reportiaforce_YYYY-MM-DD_HH-mm-ss.sqlite`).
+  - **Importação com Versionamento Seguro (`POST /api/database/import`):** Integrado a biblioteca `multer` para upload multipart. Ao realizar a importação de uma nova base de dados, a API automaticamente desliga a conexão em vigor, converte a base substituída em um "Backup de Segurança" guardando-o na pasta interna `/backups` com carimbo de tempo, finalizando com o salvamento da base enviada e reabertura limpa do servidor SQLite.
+- **Painel Administrativo Interno (Frontend):**
+  - Construído um novo Card em "Configurações" ("Gerenciamento de Banco de Dados") estritamente liberado para o nível `Admin`.
+  - Fornece botão primário para "Fazer Backup".
+  - O botão de "Restaurar Backup (Importar)" avisa com pop-ups e após a transação força a expiração da sessão dos usuários conectados fazendo uma página reload (Redirecionando-os todos ao `/login` instantaneamente em um novo ecossistema).
+- **Controle Total de Backups Automáticos:**
+  - **Endpoints Internos:** Criação da trilha RESTful de listagem e exclusão (`GET /api/database/backups` e `DELETE /api/database/backups/:filename`). Implementação de restauração direta (`POST /api/database/backups/:filename/restore`) que repete a manobra de proteger a base atual com snapshot e colocar a base selecionada como ativa.
+  - **Tabela de Arquivos Armazenados:** Implementada listagem na mesma aba do frontend demonstrando nominalmente cada backup, sua real capacidade em (MB) e data traduzida com botões integrados para o Gestor poder `Excluir` ou `Restaurar` sem manusear arquivos externos ao aplicativo.
