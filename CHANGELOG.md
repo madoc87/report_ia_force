@@ -734,3 +734,12 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
 - **Precisão nos Alertas de Integração (Ux Feedback):**
   - Refatorados os gatilhos dos botões *Gerar Relatório*, *Buscar*, *Atualizar* de campanhas e a montagem principal. 
   - Os captadores deixaram de reportar erros vagos ("Verifique se o servidor está rodando") em caso de 4xx/5xx da Hablla, para dissecarem de fato o corpo do erro retornado pelo `backend/index.js`, apontando à vista qual foi o real motivo de queda atestada como (ex: *"API Hablla (Tags): Invalid workspace token"*). Essa tratativa agiliza o processo de troubleshooting sem a necessidade de acessar os painéis de log do Back-end.
+
+## 40. Dashboard: Filtro de Mês Fiscal vs Mês Comercial (15/04/2026)
+
+- **Cálculo de Períodos Fiscais e Comerciais:**
+  - Adicionado suporte dinâmico no Dashboard para analisar campanhas considerando calendários corporativos diferentes.
+  - Implementada a função `getFiscalMonth`, limitando o reconhecimento de estatísticas do 1º ao último dia do mês regular.
+  - Implementada a função de comissionamento via `getCommercialMonth`, realocando campanhas disparadas entre o dia **21 de um mês até o dia 20 do mês seguinte** para serem computadas nas métricas do mês posterior (ex: Campanhas do dia `25/03` agora refletem os resultados de rentabilidade em `Abril`).
+- **Novo Seletor (UI):**
+  - Foi adicionado um dropdown central "Tipo de Mês", condicionado apenas para quando as opções de visualização mensal (*Por Mês de Disparo* ou *Por Mês*) estão ativas, permitindo alternância ágil entre o modo `Mês Fiscal` e `Mês Comercial` sem perder a visão segmentada por mês do painel. Todos os gráficos reagem em cascata a essa formatação.

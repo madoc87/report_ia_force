@@ -51,10 +51,38 @@ const monthOrder: Record<string, number> = {
   'Jul': 7, 'Ago': 8, 'Set': 9, 'Out': 10, 'Nov': 11, 'Dez': 12
 };
 
+const getFiscalMonth = (dateStr: string) => {
+  if (!dateStr || dateStr === 'N/A' || dateStr === 'campanha não enviada') return 'Unknown';
+  const parts = dateStr.split('/');
+  if (parts.length >= 2) {
+    const monthIndex = parseInt(parts[1], 10) - 1;
+    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    return months[monthIndex] || 'Unknown';
+  }
+  return 'Unknown';
+};
+
+const getCommercialMonth = (dateStr: string) => {
+  if (!dateStr || dateStr === 'N/A' || dateStr === 'campanha não enviada') return 'Unknown';
+  const parts = dateStr.split('/');
+  if (parts.length >= 2) {
+    const day = parseInt(parts[0], 10);
+    let monthIndex = parseInt(parts[1], 10) - 1;
+    // Commercial month starts on the 21st, so day >= 21 belongs to next month
+    if (day >= 21) {
+      monthIndex = (monthIndex + 1) % 12;
+    }
+    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    return months[monthIndex] || 'Unknown';
+  }
+  return 'Unknown';
+};
+
 export function Dashboard({ onMenuClick, notifications, setNotifications, user, onLogout, campaignsData }: DashboardProps) {
   const [data, setData] = useState<any[]>([]);
   const [filteredData, setFilteredData] = useState<any[]>([]);
   const [filterMode, setFilterMode] = useState<'month' | 'grouped' | 'month_shots' | 'individual'>('month_shots');
+  const [monthType, setMonthType] = useState<'fiscal' | 'comercial'>('fiscal');
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
   const [selectedSubMonth, setSelectedSubMonth] = useState<string>('all');
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
@@ -72,7 +100,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
               throw new Error('Sessão expirada. Por favor, faça login novamente.');
             }
           } catch (e: any) {
-             if (e && e.message && e.message.includes('Sessão expirada')) throw e;
+            if (e && e.message && e.message.includes('Sessão expirada')) throw e;
           }
         }
 
@@ -108,6 +136,10 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
             monthName = parts[1];
           }
 
+          const dateOnly = campaignMeta?.date_only || '';
+          const fiscalMonth = getFiscalMonth(dateOnly);
+          const commercialMonth = getCommercialMonth(dateOnly);
+
           // Nome agrupado (removendo .01, .02, etc)
           const groupedName = item.campaign_name.replace(/\.\d+$/, '').trim();
 
@@ -117,11 +149,11 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
           } else if (typeof item.total_cost === 'string') {
             const c = item.total_cost.replace('R$', '').trim();
             if (c.includes(',') && c.includes('.')) {
-               parsedTotalCost = parseFloat(c.replace(/\./g, '').replace(',', '.'));
+              parsedTotalCost = parseFloat(c.replace(/\./g, '').replace(',', '.'));
             } else if (c.includes(',')) {
-               parsedTotalCost = parseFloat(c.replace(',', '.'));
+              parsedTotalCost = parseFloat(c.replace(',', '.'));
             } else {
-               parsedTotalCost = parseFloat(c);
+              parsedTotalCost = parseFloat(c);
             }
           }
 
@@ -131,6 +163,8 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
             groupedName,
             month: monthVal,
             monthName,
+            fiscalMonth,
+            commercialMonth,
             shotNumber,
             salesIA: item.sales_ia || 0,
             salesManual: item.sales_manual || 0,
@@ -169,11 +203,13 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
 
     if (filterMode === 'month') {
       if (selectedMonth !== 'all') {
-        result = result.filter(d => d.monthName === selectedMonth);
+        const key = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
+        result = result.filter(d => d[key] === selectedMonth);
       }
     } else if (filterMode === 'month_shots') {
       if (selectedSubMonth !== 'all') {
-        result = result.filter(d => d.monthName === selectedSubMonth);
+        const key = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
+        result = result.filter(d => d[key] === selectedSubMonth);
       }
     } else if (filterMode === 'individual') {
       if (selectedCampaigns.length > 0) {
@@ -220,8 +256,15 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
       result = orderedGroups;
     }
 
+    result.sort((a: any, b: any) => {
+      const activeKey = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
+      const monthDiff = (monthOrder[a[activeKey]] || 0) - (monthOrder[b[activeKey]] || 0);
+      if (monthDiff !== 0) return monthDiff;
+      return a.shotNumber - b.shotNumber;
+    });
+
     setFilteredData(result);
-  }, [filterMode, selectedMonth, selectedSubMonth, selectedCampaigns, data]);
+  }, [filterMode, monthType, selectedMonth, selectedSubMonth, selectedCampaigns, data]);
 
   const totals = filteredData.reduce((acc, curr) => ({
     revenue: acc.revenue + curr.revenue,
@@ -231,7 +274,8 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     cost: acc.cost + (curr.totalCost || 0)
   }), { revenue: 0, sales: 0, clients: 0, responses: 0, cost: 0 });
 
-  const availableMonths = [...new Set(data.map(d => d.monthName))].sort((a, b) => monthOrder[a] - monthOrder[b]);
+  const activeMonthKey = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
+  const availableMonths = [...new Set(data.map(d => d[activeMonthKey]).filter(m => m !== 'Unknown'))].sort((a, b) => monthOrder[a] - monthOrder[b]);
 
   let activeMonth = 'all';
   if (filterMode === 'month') {
@@ -272,7 +316,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     const currentIndex = availableMonths.indexOf(activeMonth);
     if (currentIndex > 0) {
       const prevMonth = availableMonths[currentIndex - 1];
-      const prevMonthData = data.filter(d => d.monthName === prevMonth);
+      const prevMonthData = data.filter(d => d[activeMonthKey] === prevMonth);
       const prevTotals = prevMonthData.reduce((acc, curr) => ({
         revenue: acc.revenue + curr.revenue,
         sales: acc.sales + curr.totalSales,
@@ -331,6 +375,22 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
             </SelectContent>
           </Select>
         </div>
+
+        {(filterMode === 'month_shots' || filterMode === 'month') && (
+          <div className="flex-[0.8]">
+            {/* <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Tipo de Mês</label> */}
+            <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Filtro de Período</label>
+            <Select value={monthType} onValueChange={(v: any) => setMonthType(v)}>
+              <SelectTrigger className="bg-card border-none shadow-sm h-10">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fiscal">Mês Fiscal (01 a 30/31)</SelectItem>
+                <SelectItem value="comercial">Mês Comercial (21 a 20)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {filterMode === 'month' && (
           <div className="flex-1">
@@ -501,7 +561,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
           <CardContent className="h-[300px] flex flex-col items-center justify-center pb-8 pt-0 px-6">
             <div className="w-full max-w-[280px] h-full flex flex-col gap-[2px] items-center justify-center">
               {/* Top - Clientes */}
-              <div 
+              <div
                 className="w-full relative flex-1 bg-indigo-500 text-white flex flex-col items-center justify-center transition-all hover:brightness-110 shadow-sm"
                 style={{ clipPath: 'polygon(0 0, 100% 0, 85% 100%, 15% 100%)' }}
               >
@@ -510,9 +570,9 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
                   <span className="text-xs font-semibold uppercase tracking-wider text-indigo-100 mt-1">Clientes</span>
                 </div>
               </div>
-              
+
               {/* Middle - Respostas */}
-              <div 
+              <div
                 className="w-[70%] relative flex-1 bg-indigo-400 text-white flex flex-col items-center justify-center transition-all hover:brightness-110 shadow-sm"
                 style={{ clipPath: 'polygon(0 0, 100% 0, 78.6% 100%, 21.4% 100%)' }}
               >
@@ -523,7 +583,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
               </div>
 
               {/* Bottom - Vendas */}
-              <div 
+              <div
                 className="w-[40%] relative flex-1 bg-emerald-500 text-white flex flex-col items-center justify-center transition-all hover:brightness-110 shadow-sm"
                 style={{ clipPath: 'polygon(0 0, 100% 0, 62.5% 100%, 37.5% 100%)' }}
               >

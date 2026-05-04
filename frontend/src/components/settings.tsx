@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getBaseUrl } from '@/lib/config';
 import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -62,6 +62,13 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
     const [cronFreq, setCronFreq] = useState('1x por dia');
     const [cronLoading, setCronLoading] = useState(false);
 
+    // Database Management
+    const [isExporting, setIsExporting] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
+    const [backups, setBackups] = useState<any[]>([]);
+    const [loadingBackups, setLoadingBackups] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
     const fullMonthNames: Record<string, string> = {
         Jan: 'Janeiro', Fev: 'Fevereiro', Mar: 'Março', Abr: 'Abril', Mai: 'Maio', Jun: 'Junho',
         Jul: 'Julho', Ago: 'Agosto', Set: 'Setembro', Out: 'Outubro', Nov: 'Novembro', Dez: 'Dezembro',
@@ -124,10 +131,29 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
         }
     };
 
+    const fetchBackups = async () => {
+        if (!token) return;
+        try {
+            setLoadingBackups(true);
+            const response = await fetchWithAuth(`${BASE_URL}/api/database/backups`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setBackups(data);
+            }
+        } catch (err) {
+            console.error('Erro ao carregar backups:', err);
+        } finally {
+            setLoadingBackups(false);
+        }
+    };
+
     useEffect(() => {
         if (user?.role === 'admin') {
             fetchUsers();
             fetchCronSettings();
+            fetchBackups();
         }
     }, [user, token]);
 
@@ -203,6 +229,119 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
             alert(err.message);
         } finally {
             setCronLoading(false);
+        }
+    };
+
+    const handleExportDB = async () => {
+        try {
+            setIsExporting(true);
+            const response = await fetchWithAuth(`${BASE_URL}/api/database/export`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!response.ok) throw new Error('Erro ao exportar banco de dados.');
+            
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            const d = new Date();
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const hours = String(d.getHours()).padStart(2, '0');
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+            const seconds = String(d.getSeconds()).padStart(2, '0');
+            const nowStr = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+            const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || `database_reportiaforce_${nowStr}.sqlite`;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+        } catch (err: any) {
+            alert(err.message);
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
+    const handleImportDB = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (!confirm('Atenção: Importar um novo banco de dados irá sobrescrever a base atual (um backup da base atual será salvo). Todos os usuários logados precisarão entrar novamente. Deseja continuar?')) {
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+        }
+
+        try {
+            setIsImporting(true);
+            const formData = new FormData();
+            formData.append('database', file);
+
+            const response = await fetch(`${BASE_URL}/api/database/import`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }, // fetchWithAuth normally stringifies body, so we use raw fetch for FormData
+                body: formData
+            });
+
+            if (response.status === 401 || response.status === 403) {
+                onLogout?.();
+                throw new Error('Sessão expirada. Por favor, faça login novamente.');
+            }
+
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Erro ao importar banco de dados.');
+            
+            alert('Banco de dados importado com sucesso! Você será redirecionado para o login para uma nova conexão.');
+            onLogout?.();
+            window.location.reload();
+        } catch (err: any) {
+            alert(err.message);
+        } finally {
+            setIsImporting(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    const handleDeleteBackup = async (filename: string) => {
+        if (!confirm(`Deseja realmente excluir o backup ${filename}?`)) return;
+
+        try {
+            const response = await fetchWithAuth(`${BASE_URL}/api/database/backups/${filename}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Erro ao excluir backup.');
+            
+            fetchBackups();
+        } catch (err: any) {
+            alert(err.message);
+        }
+    };
+
+    const handleRestoreBackup = async (filename: string) => {
+        if (!confirm(`Atenção: Restaurar este backup irá substituir a base de dados atual! Um backup da base atual será criado. Todos os usuários logados precisarão entrar novamente. Deseja continuar e restaurar ${filename}?`)) return;
+
+        try {
+            setIsImporting(true);
+            const response = await fetchWithAuth(`${BASE_URL}/api/database/backups/${filename}/restore`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Erro ao restaurar backup.');
+            
+            alert('Backup restaurado com sucesso! Você será redirecionado para o login para uma nova conexão.');
+            onLogout?.();
+            window.location.reload();
+        } catch (err: any) {
+            alert(err.message);
+        } finally {
+            setIsImporting(false);
         }
     };
 
@@ -706,6 +845,89 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                             </Button>
                         </div>
                     </form>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Gerenciamento de Banco de Dados</CardTitle>
+                    <CardDescription>Faça backup completo da base de dados atual ou restaure a base a partir de um arquivo gerado anteriormente. <br/><span className="text-amber-500 font-medium">Atenção: Ao importar, a base anterior será copiada com a data atual por segurança.</span></CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="flex flex-col md:flex-row gap-4 items-center">
+                        <Button 
+                            variant="outline" 
+                            className="w-full md:w-auto font-bold" 
+                            onClick={handleExportDB} 
+                            disabled={isExporting || isImporting}
+                        >
+                            {isExporting ? 'Baixando...' : 'Fazer Backup (Exportar .sqlite)'}
+                        </Button>
+                        
+                        <div className="flex-1 w-full relative">
+                            <input 
+                                type="file" 
+                                accept=".sqlite,.db" 
+                                className="hidden" 
+                                ref={fileInputRef} 
+                                onChange={handleImportDB} 
+                            />
+                            <Button 
+                                variant="default" 
+                                className="w-full md:w-auto font-bold" 
+                                onClick={() => fileInputRef.current?.click()} 
+                                disabled={isExporting || isImporting}
+                            >
+                                {isImporting ? 'Importando e Reiniciando...' : 'Restaurar Backup (Importar .sqlite)'}
+                            </Button>
+                        </div>
+                    </div>
+
+                    <div className="mt-8">
+                        <h3 className="font-semibold mb-4">Backups Armazenados</h3>
+                        <div className="rounded-xl border border-zinc-800 overflow-hidden">
+                            <Table>
+                                <TableHeader className="bg-form-header">
+                                    <TableRow>
+                                        <TableHead>Arquivo</TableHead>
+                                        <TableHead>Data de Criação</TableHead>
+                                        <TableHead>Tamanho</TableHead>
+                                        <TableHead className="text-right">Ações</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {loadingBackups ? (
+                                        <TableRow>
+                                            <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">Carregando backups...</TableCell>
+                                        </TableRow>
+                                    ) : backups.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">Nenhum backup encontrado no servidor.</TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        backups.map((b) => (
+                                            <TableRow key={b.filename}>
+                                                <TableCell className="font-medium text-xs break-all">{b.filename}</TableCell>
+                                                <TableCell className="text-xs">{format(new Date(b.createdAt), "dd/MM/yyyy 'às' HH:mm:ss")}</TableCell>
+                                                <TableCell className="text-xs">{(b.size / 1024 / 1024).toFixed(2)} MB</TableCell>
+                                                <TableCell className="text-right">
+                                                    <div className="flex justify-end gap-2">
+                                                        <Button variant="outline" size="sm" onClick={() => handleRestoreBackup(b.filename)} disabled={isImporting} title="Restaurar este backup">
+                                                            Restaurar
+                                                        </Button>
+                                                        <Button variant="outline" size="sm" onClick={() => handleDeleteBackup(b.filename)} className="hover:text-red-500 hover:border-red-500" disabled={isImporting} title="Excluir backup">
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </Button>
+                                                    </div>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+                    </div>
+
                 </CardContent>
             </Card>
 

@@ -8,6 +8,19 @@ import { open } from 'sqlite';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import cron from 'node-cron';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import multer from 'multer';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const upload = multer({ dest: path.join(__dirname, 'tmp-uploads') });
+const backupsDir = path.join(__dirname, 'backups');
+
+if (!fs.existsSync(backupsDir)) {
+  fs.mkdirSync(backupsDir, { recursive: true });
+}
 
 const app = express();
 const port = process.env.PORT || 3005;
@@ -827,6 +840,146 @@ app.delete('/api/users/:id', authenticateToken, authorizeAdmin, async (req, res)
 // Usuário escolhe a própria senha nova (forçado ou não)
 // (Aqui viria o restante do arquivo do usuário...)
 // Essa linha serve apenas para referência do chunk caso haja mais conteúdo no final do arquivo orig.
+
+// --- Database Management Endpoints ---
+
+const getLocalTimestamp = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const seconds = String(d.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+};
+
+app.get('/api/database/export', authenticateToken, authorizeAdmin, (req, res) => {
+  const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite');
+  if (fs.existsSync(dbPath)) {
+    const nowStr = getLocalTimestamp();
+    res.download(dbPath, `database_reportiaforce_${nowStr}.sqlite`);
+  } else {
+    res.status(404).json({ message: 'Arquivo do banco de dados não encontrado.' });
+  }
+});
+
+app.post('/api/database/import', authenticateToken, authorizeAdmin, upload.single('database'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
+  }
+
+  try {
+    const currentDbPath = process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite');
+    
+    // Desconecta o banco atual
+    if (db) {
+      await db.close();
+    }
+
+    if (fs.existsSync(currentDbPath)) {
+      // Renomeia o banco atual para a pasta de backups com a data local
+      const nowStr = getLocalTimestamp();
+      const backupPath = path.join(backupsDir, `database_${nowStr}.sqlite`);
+      fs.renameSync(currentDbPath, backupPath);
+    }
+
+    // Move o arquivo recebido para o path oficial
+    fs.renameSync(req.file.path, currentDbPath);
+
+    // Reconecta ao banco
+    await initializeDatabase(currentDbPath);
+
+    res.status(200).json({ message: 'Banco de dados importado com sucesso.' });
+  } catch (error) {
+    console.error('Erro ao importar banco de dados:', error);
+    // Tenta reabrir o banco original caso de erro
+    try {
+        await initializeDatabase();
+    } catch(e) {}
+    res.status(500).json({ message: 'Erro interno ao importar o banco.', error: error.message });
+  }
+});
+
+// Listar todos os backups
+app.get('/api/database/backups', authenticateToken, authorizeAdmin, (req, res) => {
+  try {
+    if (!fs.existsSync(backupsDir)) {
+      return res.status(200).json([]);
+    }
+    const files = fs.readdirSync(backupsDir).filter(f => f.endsWith('.sqlite') || f.endsWith('.db'));
+    const backups = files.map(file => {
+      const stats = fs.statSync(path.join(backupsDir, file));
+      return {
+        filename: file,
+        size: stats.size,
+        createdAt: stats.birthtime || stats.mtime
+      };
+    }).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.status(200).json(backups);
+  } catch (error) {
+    console.error('Erro ao listar backups:', error);
+    res.status(500).json({ message: 'Erro interno ao listar backups.', error: error.message });
+  }
+});
+
+// Restaurar um backup especifico
+app.post('/api/database/backups/:filename/restore', authenticateToken, authorizeAdmin, async (req, res) => {
+  const { filename } = req.params;
+  const backupFilePath = path.join(backupsDir, filename);
+
+  if (!fs.existsSync(backupFilePath)) {
+    return res.status(404).json({ message: 'Arquivo de backup não encontrado.' });
+  }
+
+  try {
+    const currentDbPath = process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite');
+    
+    // Desconecta o banco atual
+    if (db) {
+      await db.close();
+    }
+
+    if (fs.existsSync(currentDbPath)) {
+      // Renomeia o banco atual para a pasta de backups com a data local
+      const nowStr = getLocalTimestamp();
+      const safeBackupPath = path.join(backupsDir, `database_${nowStr}.sqlite`);
+      fs.renameSync(currentDbPath, safeBackupPath);
+    }
+
+    // Copia o backup desejado para ser o banco atual
+    fs.copyFileSync(backupFilePath, currentDbPath);
+
+    // Reconecta ao banco
+    await initializeDatabase(currentDbPath);
+
+    res.status(200).json({ message: 'Backup restaurado com sucesso.' });
+  } catch (error) {
+    console.error('Erro ao restaurar backup:', error);
+    try {
+        await initializeDatabase();
+    } catch(e) {}
+    res.status(500).json({ message: 'Erro interno ao restaurar o backup.', error: error.message });
+  }
+});
+
+// Excluir um backup especifico
+app.delete('/api/database/backups/:filename', authenticateToken, authorizeAdmin, (req, res) => {
+  const { filename } = req.params;
+  const backupFilePath = path.join(backupsDir, filename);
+
+  if (!fs.existsSync(backupFilePath)) {
+    return res.status(404).json({ message: 'Arquivo de backup não encontrado.' });
+  }
+
+  try {
+    fs.unlinkSync(backupFilePath);
+    res.status(200).json({ message: 'Backup excluído com sucesso.' });
+  } catch (error) {
+    console.error('Erro ao excluir backup:', error);
+    res.status(500).json({ message: 'Erro interno ao excluir o backup.', error: error.message });
+  }
+});
 
 // --- Configurações / Cronjob Endpoints ---
 
