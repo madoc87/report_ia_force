@@ -18,6 +18,25 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 
 const MONTH_OPTIONS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
+const parseUserAgent = (ua: string) => {
+    if (!ua || ua === 'Desconhecido') return 'Desconhecido';
+    let browser = 'Navegador Desconhecido';
+    if (ua.includes('Edg/')) browser = 'Edge';
+    else if (ua.includes('Chrome/')) browser = 'Chrome';
+    else if (ua.includes('Firefox/')) browser = 'Firefox';
+    else if (ua.includes('Safari/') && !ua.includes('Chrome/')) browser = 'Safari';
+    else if (ua.includes('Opera') || ua.includes('OPR/')) browser = 'Opera';
+
+    let os = 'OS Desconhecido';
+    if (ua.includes('Windows')) os = 'Windows';
+    else if (ua.includes('Mac OS') || ua.includes('Macintosh')) os = 'macOS';
+    else if (ua.includes('Linux')) os = 'Linux';
+    else if (ua.includes('Android')) os = 'Android';
+    else if (ua.includes('iPhone') || ua.includes('iPad') || ua.includes('iPod')) os = 'iOS';
+
+    return `${browser} no ${os}`;
+};
+
 interface SettingsProps {
     token: string | null;
     onMenuClick: () => void;
@@ -68,6 +87,12 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
     const [backups, setBackups] = useState<any[]>([]);
     const [loadingBackups, setLoadingBackups] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Login Logs
+    const [loginLogs, setLoginLogs] = useState<any[]>([]);
+    const [loadingLogs, setLoadingLogs] = useState(false);
+    const [logsPage, setLogsPage] = useState(1);
+    const [logsTotalPages, setLogsTotalPages] = useState(1);
 
     const fullMonthNames: Record<string, string> = {
         Jan: 'Janeiro', Fev: 'Fevereiro', Mar: 'Março', Abr: 'Abril', Mai: 'Maio', Jun: 'Junho',
@@ -149,11 +174,32 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
         }
     };
 
+    const fetchLoginLogs = async (page = 1) => {
+        if (!token) return;
+        try {
+            setLoadingLogs(true);
+            const response = await fetchWithAuth(`${BASE_URL}/api/login-logs?page=${page}&limit=5`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setLoginLogs(data.logs || []);
+                setLogsTotalPages(data.totalPages || 1);
+                setLogsPage(data.page || 1);
+            }
+        } catch (err) {
+            console.error('Erro ao carregar logs de login:', err);
+        } finally {
+            setLoadingLogs(false);
+        }
+    };
+
     useEffect(() => {
         if (user?.role === 'admin') {
             fetchUsers();
             fetchCronSettings();
             fetchBackups();
+            fetchLoginLogs(1);
         }
     }, [user, token]);
 
@@ -187,18 +233,18 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
         }
     };
 
-        const handleFreqChange = (val: string) => {
-            setCronFreq(val);
-            const count = parseInt(val.match(/\d+/)?.[0] || '1', 10);
-            setCronTimes(prev => {
-                const newTimes = [...prev];
-                while (newTimes.length < count) newTimes.push('00:00');
-                if (newTimes.length > count) newTimes.length = count;
-                return newTimes;
-            });
-        };
+    const handleFreqChange = (val: string) => {
+        setCronFreq(val);
+        const count = parseInt(val.match(/\d+/)?.[0] || '1', 10);
+        setCronTimes(prev => {
+            const newTimes = [...prev];
+            while (newTimes.length < count) newTimes.push('00:00');
+            if (newTimes.length > count) newTimes.length = count;
+            return newTimes;
+        });
+    };
 
-        const handleSaveCron = async (e: React.FormEvent) => {
+    const handleSaveCron = async (e: React.FormEvent) => {
         e.preventDefault();
         setCronLoading(true);
         try {
@@ -210,10 +256,10 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                 },
                 body: JSON.stringify({ enabled: true, time: cronTimes, frequency: cronFreq })
             });
-            
+
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || 'Erro ao salvar configuração do Agendamento.');
-            
+
             setNotifications(prev => [{
                 id: Math.random().toString(36).substring(7),
                 title: 'Configurações Salvas',
@@ -222,7 +268,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                 timestamp: new Date(),
                 read: false
             }, ...prev]);
-            
+
             // Pop-up extra solicitado para garantir feedback visual
             alert("Agendamento Automático configurado com sucesso!");
         } catch (err: any) {
@@ -239,7 +285,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (!response.ok) throw new Error('Erro ao exportar banco de dados.');
-            
+
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -292,7 +338,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
 
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || 'Erro ao importar banco de dados.');
-            
+
             alert('Banco de dados importado com sucesso! Você será redirecionado para o login para uma nova conexão.');
             onLogout?.();
             window.location.reload();
@@ -315,7 +361,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
 
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || 'Erro ao excluir backup.');
-            
+
             fetchBackups();
         } catch (err: any) {
             alert(err.message);
@@ -334,7 +380,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
 
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || 'Erro ao restaurar backup.');
-            
+
             alert('Backup restaurado com sucesso! Você será redirecionado para o login para uma nova conexão.');
             onLogout?.();
             window.location.reload();
@@ -603,15 +649,15 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                                                 <div className="space-y-2">
                                                     <h4 className="font-medium text-sm leading-none">Template da Mensagem</h4>
                                                     <p className="text-xs text-muted-foreground">Esta é a mensagem padrão que será vinculada a esta campanha. Você pode ajustá-la agora ou a qualquer momento.</p>
-                                                    <textarea 
+                                                    <textarea
                                                         className="w-full min-h-[140px] text-sm border border-zinc-800 bg-background rounded-md p-2 mt-2 focus:outline-none focus:ring-2 focus:ring-ring"
                                                         value={campTemplateEnviado}
                                                         onChange={e => setCampTemplateEnviado(e.target.value)}
                                                     />
                                                 </div>
-                                                <Button 
-                                                    type="button" 
-                                                    className="w-full" 
+                                                <Button
+                                                    type="button"
+                                                    className="w-full"
                                                     onClick={() => setTemplatePopoverOpen(false)}
                                                 >
                                                     Salvar Template
@@ -823,17 +869,17 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                                 {cronTimes.map((t, index) => (
                                     <div key={index} className="space-y-2">
                                         <Label htmlFor={`cronTime_${index}`}>{cronTimes.length > 1 ? `Horário ${index + 1}` : 'Horário de Execução'} (HH:MM)</Label>
-                                        <Input 
-                                            id={`cronTime_${index}`} 
-                                            type="time" 
-                                            required 
-                                            value={t} 
+                                        <Input
+                                            id={`cronTime_${index}`}
+                                            type="time"
+                                            required
+                                            value={t}
                                             onChange={e => {
                                                 const newTimes = [...cronTimes];
                                                 newTimes[index] = e.target.value;
                                                 setCronTimes(newTimes);
-                                            }} 
-                                            className="bg-background [color-scheme:light] dark:[color-scheme:dark]" 
+                                            }}
+                                            className="bg-background [color-scheme:light] dark:[color-scheme:dark]"
                                         />
                                     </div>
                                 ))}
@@ -851,31 +897,34 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
             <Card>
                 <CardHeader>
                     <CardTitle>Gerenciamento de Banco de Dados</CardTitle>
-                    <CardDescription>Faça backup completo da base de dados atual ou restaure a base a partir de um arquivo gerado anteriormente. <br/><span className="text-amber-500 font-medium">Atenção: Ao importar, a base anterior será copiada com a data atual por segurança.</span></CardDescription>
+                    <CardDescription>Faça backup completo da base de dados atual ou restaure a base a partir de um arquivo gerado anteriormente. <br />
+                        {/* <span className="text-amber-500 font-medium">Atenção: Ao importar, a base anterior será copiada com a data atual por segurança.</span> */}
+                        <span className="text-destructive font-medium pt-3">Atenção: Ao importar, a base anterior será copiada com a data atual por segurança.</span>
+                    </CardDescription>
                 </CardHeader>
                 <CardContent>
                     <div className="flex flex-col md:flex-row gap-4 items-center">
-                        <Button 
-                            variant="outline" 
-                            className="w-full md:w-auto font-bold" 
-                            onClick={handleExportDB} 
+                        <Button
+                            variant="outline"
+                            className="w-full md:w-auto font-bold"
+                            onClick={handleExportDB}
                             disabled={isExporting || isImporting}
                         >
                             {isExporting ? 'Baixando...' : 'Fazer Backup (Exportar .sqlite)'}
                         </Button>
-                        
+
                         <div className="flex-1 w-full relative">
-                            <input 
-                                type="file" 
-                                accept=".sqlite,.db" 
-                                className="hidden" 
-                                ref={fileInputRef} 
-                                onChange={handleImportDB} 
+                            <input
+                                type="file"
+                                accept=".sqlite,.db"
+                                className="hidden"
+                                ref={fileInputRef}
+                                onChange={handleImportDB}
                             />
-                            <Button 
-                                variant="default" 
-                                className="w-full md:w-auto font-bold" 
-                                onClick={() => fileInputRef.current?.click()} 
+                            <Button
+                                variant="default"
+                                className="w-full md:w-auto font-bold"
+                                onClick={() => fileInputRef.current?.click()}
                                 disabled={isExporting || isImporting}
                             >
                                 {isImporting ? 'Importando e Reiniciando...' : 'Restaurar Backup (Importar .sqlite)'}
@@ -928,6 +977,62 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                         </div>
                     </div>
 
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Histórico de Acessos</CardTitle>
+                    <CardDescription>Visualize o log de acessos realizados pelos usuários na plataforma.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="rounded-xl border border-zinc-800 overflow-hidden max-h-[400px] overflow-y-auto">
+                        <Table>
+                            <TableHeader className="bg-form-header sticky top-0 z-10 shadow-sm">
+                                <TableRow>
+                                    <TableHead>Data/Hora</TableHead>
+                                    <TableHead>Usuário</TableHead>
+                                    <TableHead>Email</TableHead>
+                                    <TableHead>Endereço IP</TableHead>
+                                    <TableHead>User Agent</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {loadingLogs ? (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Carregando logs...</TableCell>
+                                    </TableRow>
+                                ) : loginLogs.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Nenhum log de acesso encontrado.</TableCell>
+                                    </TableRow>
+                                ) : (
+                                    loginLogs.map((log) => {
+                                        // SQLite returns YYYY-MM-DD HH:MM:SS in UTC. We format it to ISO string format (T and Z) to convert correctly to local time.
+                                        const utcDateString = log.login_time ? log.login_time.replace(' ', 'T') + 'Z' : new Date().toISOString();
+                                        return (
+                                            <TableRow key={log.id}>
+                                                <TableCell className="text-xs whitespace-nowrap">
+                                                    {format(new Date(utcDateString), "dd/MM/yyyy HH:mm:ss")}
+                                                </TableCell>
+                                                <TableCell className="font-medium text-xs">{log.user_name}</TableCell>
+                                                <TableCell className="text-xs">{log.user_email}</TableCell>
+                                                <TableCell className="text-xs whitespace-nowrap">{log.ip_address}</TableCell>
+                                                <TableCell className="text-xs break-words max-w-[200px]" title={log.user_agent}>
+                                                    <span className="line-clamp-2">{parseUserAgent(log.user_agent)}</span>
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                    <div className="flex justify-between items-center px-4 py-3 border-t border-zinc-800 bg-muted/20 mt-[-1px] rounded-b-xl border-x">
+                        <Button variant="outline" size="sm" onClick={() => fetchLoginLogs(logsPage - 1)} disabled={logsPage <= 1 || loadingLogs}>Anterior</Button>
+                        <span className="text-sm text-muted-foreground">Página {logsPage} de {logsTotalPages}</span>
+                        <Button variant="outline" size="sm" onClick={() => fetchLoginLogs(logsPage + 1)} disabled={logsPage >= logsTotalPages || loadingLogs}>Próxima</Button>
+                    </div>
                 </CardContent>
             </Card>
 

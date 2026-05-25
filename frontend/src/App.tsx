@@ -150,7 +150,7 @@ function App() {
   // Custom fetch wrapper para injetar o token e tratar expirações (401/403)
   const apiFetch = async (url: string, options: RequestInit = {}) => {
     const currentToken = localStorage.getItem('token');
-    
+
     if (currentToken) {
       try {
         const payload = JSON.parse(window.atob(currentToken.split('.')[1]));
@@ -251,38 +251,38 @@ function App() {
   // Roda logo ao logar e a cada 60s
   useEffect(() => {
     if (!token) return;
-    
+
     const fetchSysLogs = async () => {
       try {
         const response = await apiFetch(`${BASE_URL}/api/sys-logs`);
         if (!response.ok) return;
         const logs = await response.json();
-        
+
         if (logs.length > 0) {
-           const mappedNotifs: Notification[] = logs.map((l: any) => ({
-               id: l.id,
-               title: l.title,
-               message: l.message,
-               type: l.type,
-               timestamp: new Date(l.timestamp),
-               read: false,
-               isBackend: true 
-           }));
-           
-           setNotifications(prev => {
-               const existingIds = prev.map(p => p.id);
-               const newNotifs = mappedNotifs.filter(n => !existingIds.includes(n.id));
-               return [...newNotifs, ...prev];
-           });
-           
-           // Marca que já puxamos pro frontend, 
-           // para o banco não enviar novamente do backend
-           const ids = logs.map((l: any) => l.id);
-           await apiFetch(`${BASE_URL}/api/sys-logs/mark-read`, {
-               method: 'POST',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ ids })
-           });
+          const mappedNotifs: Notification[] = logs.map((l: any) => ({
+            id: l.id,
+            title: l.title,
+            message: l.message,
+            type: l.type,
+            timestamp: new Date(l.timestamp),
+            read: false,
+            isBackend: true
+          }));
+
+          setNotifications(prev => {
+            const existingIds = prev.map(p => p.id);
+            const newNotifs = mappedNotifs.filter(n => !existingIds.includes(n.id));
+            return [...newNotifs, ...prev];
+          });
+
+          // Marca que já puxamos pro frontend, 
+          // para o banco não enviar novamente do backend
+          const ids = logs.map((l: any) => l.id);
+          await apiFetch(`${BASE_URL}/api/sys-logs/mark-read`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids })
+          });
         }
       } catch (err) {
         // Silencioso
@@ -646,7 +646,7 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
     selectedCampaigns.forEach((campName) => {
       const campDb = campaignsData.find((c: any) => c.name === campName);
       const template = campDb?.template_enviado || "Lembrete de Troca de Refil!  Olá *{{1}}*, o seu refil já completou *9 meses* de uso.   Refil vencido pode comprometer a *pureza da água* e a *eficiência* do seu purificador.  Não esqueça de agendar a próxima troca!  * Quero agendar  * Não quero contato";
-      
+
       const list = grouped.get(template) || [];
       list.push(campName);
       grouped.set(template, list);

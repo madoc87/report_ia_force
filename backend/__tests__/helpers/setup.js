@@ -87,6 +87,11 @@ export async function cleanupTestDB() {
     await db.run('DELETE FROM users');
     await db.run('DELETE FROM settings');
     await db.run('DELETE FROM sys_logs');
+    try {
+      await db.run('DELETE FROM login_logs');
+    } catch (e) {
+      // Ignorar se a tabela não existir em algum teste antigo
+    }
     await db.close();
   }
 }

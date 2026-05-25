@@ -28,7 +28,8 @@
     --accent: 210 40% 96.1%;
     --accent-foreground: 222.2 47.4% 11.2%;
 
-    --destructive: 0 84.2% 60.2%;
+    /*red-600*/
+    --destructive: 357, 100%, 45%;
     --destructive-foreground: 210 40% 98%;
 
     --form-header: 210 38% 95%;
@@ -64,7 +65,9 @@
     --accent: 0 0% 14.9%;
     --accent-foreground: 0 0% 98%;
 
-    --destructive: 0 62.8% 30.6%;
+    /* --destructive: 0 62.8% 30.6%; */
+    /*red-500*/
+    --destructive: 357, 96%, 58%;
     --destructive-foreground: 0 0% 98%;
 
     --form-header: 0 0% 4%;

@@ -78,6 +78,21 @@ app.post('/api/login', async (req, res) => {
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
 
+    let ipAddress = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip || 'Desconhecido';
+    if (ipAddress === '::1' || ipAddress === '::ffff:127.0.0.1') {
+      ipAddress = '127.0.0.1 (Localhost)';
+    }
+    const userAgent = req.headers['user-agent'] || 'Desconhecido';
+
+    try {
+      await db.run(
+        'INSERT INTO login_logs (user_id, user_email, user_name, ip_address, user_agent) VALUES (?, ?, ?, ?, ?)',
+        [user.id, user.email, user.name, ipAddress, userAgent]
+      );
+    } catch (logError) {
+      console.error('Erro ao salvar log de login:', logError);
+    }
+
     const payload = {
       id: user.id,
       name: user.name,
@@ -178,6 +193,18 @@ const initializeDatabase = async (dbPath) => {
       type TEXT,
       timestamp DATETIME,
       is_read INTEGER DEFAULT 0
+    )
+  `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS login_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      user_email TEXT,
+      user_name TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      login_time DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -786,6 +813,24 @@ app.get('/api/users', authenticateToken, authorizeAdmin, async (req, res) => {
     res.status(200).json(users);
   } catch (error) {
     res.status(500).json({ message: 'Erro ao buscar usuários', error: error.message });
+  }
+});
+
+// Obter logs de login (apenas Admin)
+app.get('/api/login-logs', authenticateToken, authorizeAdmin, async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 5;
+  const offset = (page - 1) * limit;
+
+  try {
+    const totalResult = await db.get('SELECT COUNT(*) as count FROM login_logs');
+    const total = totalResult.count;
+    const totalPages = Math.ceil(total / limit);
+
+    const logs = await db.all('SELECT * FROM login_logs ORDER BY login_time DESC LIMIT ? OFFSET ?', [limit, offset]);
+    res.status(200).json({ logs, totalPages, page, total });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao buscar logs de login', error: error.message });
   }
 });
 

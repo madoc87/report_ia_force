@@ -756,3 +756,15 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
 - **Controle Total de Backups Automáticos:**
   - **Endpoints Internos:** Criação da trilha RESTful de listagem e exclusão (`GET /api/database/backups` e `DELETE /api/database/backups/:filename`). Implementação de restauração direta (`POST /api/database/backups/:filename/restore`) que repete a manobra de proteger a base atual com snapshot e colocar a base selecionada como ativa.
   - **Tabela de Arquivos Armazenados:** Implementada listagem na mesma aba do frontend demonstrando nominalmente cada backup, sua real capacidade em (MB) e data traduzida com botões integrados para o Gestor poder `Excluir` ou `Restaurar` sem manusear arquivos externos ao aplicativo.
+## 42. Registro e Histórico de Acessos de Usuários (25/05/2026)
+
+- **Monitoramento de Sessões (Backend):**
+  - Criação da nova tabela `login_logs` no banco de dados SQLite para auditar e rastrear todos os acessos bem-sucedidos à plataforma.
+  - O sistema passa a gravar automaticamente os dados vitais da requisição (ID, Nome, Email) em conjunto com o Endereço IP do operador e a versão de seu navegador (`User-Agent`).
+  - Desenvolvida a rota segura `GET /api/login-logs` com suporte total a paginação (`page` e `limit`) limitando a entrega a blocos pré-definidos para poupar recursos.
+  - Integração de verificação para traduzir IPs formatados nativamente como Locais (`::1` e `::ffff:127.0.0.1`) para uma leitura amigável de `127.0.0.1 (Localhost)`.
+- **Painel Analítico para Administradores (Frontend):**
+  - Implementado novo Card na tela de "Configurações" ("Histórico de Acessos") liberado estritamente para perfis de `Admin` para Gestão de Segurança.
+  - A interface converte e corrige automaticamente os fusos horários recebidos do Banco de Dados (sempre armazenados nativamente em UTC) para o fuso horário ativo no navegador do Admin que está visualizando.
+  - Criação de uma função inteligente (`parseUserAgent`) que simplifica a string bruta de "User-Agent" para termos enxutos e intuitivos (ex: "Chrome no Windows", "Safari no macOS").
+  - Acoplamento do painel ao backend contando com Paginação fluida (5 registros por página) e exibição das páginas com botões de Próxima/Anterior, viabilizando alta performance de renderização independente do volume de dados armazenados.

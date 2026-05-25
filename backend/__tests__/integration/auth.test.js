@@ -29,6 +29,25 @@ describe('POST /api/login', () => {
     expect(res.body.user.name).toBe('Admin Teste');
   });
 
+  test('salva um log de login no banco após login bem-sucedido', async () => {
+    const res = await request(app)
+      .post('/api/login')
+      .set('User-Agent', 'TestAgent/1.0')
+      .set('X-Forwarded-For', '127.0.0.1')
+      .send({ email: 'admin@teste.com', password: 'admin123' });
+
+    expect(res.status).toBe(200);
+
+    // Verificar no banco de dados se o log foi criado
+    const { db } = await import('../helpers/setup.js');
+    const logs = await db.all('SELECT * FROM login_logs WHERE user_email = ? ORDER BY login_time DESC', ['admin@teste.com']);
+    
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs[0].user_name).toBe('Admin Teste');
+    expect(logs[0].ip_address).toContain('127.0.0.1');
+    expect(logs[0].user_agent).toBe('TestAgent/1.0');
+  });
+
   test('retorna 401 com email inexistente', async () => {
     const res = await request(app)
       .post('/api/login')
