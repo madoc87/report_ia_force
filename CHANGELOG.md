@@ -768,3 +768,43 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
   - A interface converte e corrige automaticamente os fusos horários recebidos do Banco de Dados (sempre armazenados nativamente em UTC) para o fuso horário ativo no navegador do Admin que está visualizando.
   - Criação de uma função inteligente (`parseUserAgent`) que simplifica a string bruta de "User-Agent" para termos enxutos e intuitivos (ex: "Chrome no Windows", "Safari no macOS").
   - Acoplamento do painel ao backend contando com Paginação fluida (5 registros por página) e exibição das páginas com botões de Próxima/Anterior, viabilizando alta performance de renderização independente do volume de dados armazenados.
+
+## 43. Implementação da Análise de Perdas e Painel de Inconsistências (25/05/2026)
+
+- **Novo Relatório "Análise de Perdas":**
+  - Adicionada uma nova aba "Análise de Perdas" na navegação principal para avaliação detalhada dos motivos de não conversão.
+  - O painel exibe KPIs diretos: Total de Cartões, Em Atendimento, Ganhos e Perdidos.
+  - Implementado o agrupamento lógico das tags de perda, facilitando a identificação de pontos de atrito (ex: Reclamou do valor, Sem condição financeira, Não tem interesse, etc). A lógica removeu o agrupamento de falhas financeiras e desinteresse para exibir de forma clara e isolada métricas importantes.
+- **Métricas Específicas de "Retorno":**
+  - Implementada sessão isolada para analisar cartões marcados com a tag "IA - Retorno".
+  - Demonstração do número total de retornos e conversão detalhada em Ganhos e Perdidos.
+  - Exibição focada apenas nos motivos de perda associados a esses clientes retornados.
+- **Painel de Inconsistências (Restrito a Admin):**
+  - Construído um alerta visual e tabela restrita para usuários administradores.
+  - Lista cartões da Hablla com conflitos de tags de vendas e perdas (ex: Cartão marcado como Ganho, mas com tag de Não Responde, ou contendo simultaneamente tag de Venda IA e Reclamou do Valor).
+  - Auxilia na triagem e manutenção da consistência dos dados que alimentam os relatórios.
+
+## 44. Otimização de Performance da Análise de Perdas (25/05/2026)
+
+- **Migração do Processamento para o Backend:**
+  - Criação da tabela `loss_analysis_summaries` no banco de dados SQLite para cachear os dados de análise de perdas por campanha.
+  - A lógica de cálculos complexos de KPIs e agrupamentos (Total, Ganhos, Perdidos, Retornos, Inconsistências) foi migrada inteiramente do Frontend para o Backend (função `calculateLossAnalysis`), reduzindo drasticamente a carga do navegador.
+  - Implementação de um novo endpoint especializado `GET /api/loss-analysis` que suporta a consolidação de múltiplas campanhas, filtragem por datas e entrega dos dados já pré-processados e prontos para a tela do usuário.
+- **Atualização Automatizada via Cronjob:**
+  - O fluxo da Análise de Perdas foi embutido dentro da função mestra `processCampaign`, garantindo que os painéis sejam atualizados automaticamente, seguindo as frequências diárias determinadas nas Configurações.
+- **Refinamento na Exibição:**
+  - Remoção definitiva da categoria arbitrária de "Outros" no painel e desativação global de grupos de tags secundárias, exibindo de forma nominal as etiquetas responsáveis pelas perdas, conferindo muito mais clareza para tomadas de decisão pela equipe de monitoramento.
+- **Melhorias no Painel de Inconsistências:**
+  - Inserido um contador no cabeçalho do painel para exibir o volume total de inconsistências da busca atual.
+  - O painel agora possui um sistema de paginação local (limitado a 10 registros por tela), para evitar degradação de performance e de UX quando a lista é muito grande.
+  - Adicionado um botão interativo em cada linha da tabela (ícone de link externo) que permite ao administrador abrir o cartão com inconsistência diretamente na plataforma da Hablla em uma nova guia, agilizando a auditoria dos dados.
+  - As tags "IA - Server Error" e "IA - Erro fluxo" agora são ignoradas ao calcular inconsistências, pois elas representam problemas no processo mas podem estar atreladas tanto a cartões ganhos quanto perdidos, não configurando um conflito real na conversão.
+
+## 45. Melhorias na Tabela do Dashboard (29/06/2026)
+
+- **Atualização do Título e Totalização:**
+  - O título da tabela de campanhas no Dashboard agora exibe dinamicamente o número total de campanhas retornadas após a aplicação dos filtros (ex: "Campanhas - Total 35").
+- **Paginação de Resultados:**
+  - Implementada paginação nativa na tabela de campanhas do Dashboard, exibindo 15 itens por página para melhorar a performance de renderização e evitar a criação de uma página excessivamente longa.
+  - Adicionados controles de navegação ("Anterior" e "Próxima") e indicador de página no rodapé da tabela.
+  - A paginação é redefinida para a primeira página automaticamente ao alterar qualquer filtro.

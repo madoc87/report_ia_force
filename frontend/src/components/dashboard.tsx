@@ -3,6 +3,7 @@ import { getBaseUrl } from '@/lib/config';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
 import {
   DollarSign, ShoppingCart, TrendingUp, Users,
   ArrowUpRight
@@ -87,6 +88,8 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
   const [selectedSubMonth, setSelectedSubMonth] = useState<string>('all');
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 15;
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -264,6 +267,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     });
 
     setFilteredData(result);
+    setCurrentPage(1);
   }, [filterMode, monthType, selectedMonth, selectedSubMonth, selectedCampaigns, data]);
 
   const totals = filteredData.reduce((acc, curr) => ({
@@ -346,6 +350,12 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
   }
 
   if (isLoading) return <div className="p-8 text-center">Carregando Dashboard...</div>;
+
+  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+  const paginatedData = filteredData.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
 
   return (
     <div className="flex-1 bg-background min-h-screen p-4 md:p-8 text-foreground transition-colors duration-300">
@@ -640,7 +650,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
       {/* Recent Campaigns Table */}
       <Card className="border-none shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg">Campanhas</CardTitle>
+          <CardTitle className="text-lg">Campanhas - Total {filteredData.length}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
@@ -656,7 +666,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-50/10">
-                {filteredData.map((item, i) => (
+                {paginatedData.map((item, i) => (
                   <tr key={i} className="hover:bg-zinc-50/5 transition-colors">
                     <td className="px-4 py-4 font-medium">{item.name}</td>
                     <td className="px-4 py-4 text-center text-xs text-muted-foreground">{item.month}</td>
@@ -679,6 +689,30 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
               </tbody>
             </table>
           </div>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+              >
+                Anterior
+              </Button>
+              <span className="text-sm text-zinc-400">
+                Página {currentPage} de {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+              >
+                Próxima
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
