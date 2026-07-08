@@ -82,7 +82,7 @@ app.post('/api/login', async (req, res) => {
     if (ipAddress === '::1' || ipAddress === '::ffff:127.0.0.1') {
       ipAddress = '127.0.0.1 (Localhost)';
     }
-    const userAgent = req.headers['user-agent'] || 'Desconhecido';
+    const userAgent = req.get('user-agent') || 'Desconhecido';
 
     try {
       await db.run(
@@ -137,6 +137,26 @@ const initializeDatabase = async (dbPath) => {
       response_rate TEXT,
       conversion_sales_clients TEXT,
       conversion_sales_responses TEXT,
+      last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(campaign_name, board_id)
+    )
+  `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS loss_analysis_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_name TEXT NOT NULL,
+      board_id TEXT,
+      total_cards INTEGER,
+      in_progress INTEGER,
+      won INTEGER,
+      lost INTEGER,
+      return_total INTEGER,
+      return_won INTEGER,
+      return_lost INTEGER,
+      loss_reasons TEXT,
+      return_loss_reasons TEXT,
+      inconsistencies TEXT,
       last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(campaign_name, board_id)
     )
@@ -409,6 +429,100 @@ const calculateSummary = (cards, boardName) => {
   };
 };
 
+// --- Helper: Calculate Loss Analysis ---
+const calculateLossAnalysis = (cards) => {
+  const WIN_TAGS = ["IA - Venda IA", "IA - Venda Manual", "IA - Venda Operador"];
+  const LOSS_TAGS = [
+    "IA - Reclamou do valor",
+    "IA - Sem condição financeira",
+    "IA - Não tem interesse",
+    "IA - Não responde",
+    "IA - Trocar depois",
+    "IA - Número Errado",
+    "IA - Desativar telefone",
+    "IA - Desativar cliente",
+    "IA - Já Trocou",
+    "IA - Insatisfeito",
+    "IA - Mgs não enviada",
+    "IA - Erro fluxo",
+    "IA - Server Error"
+  ];
+
+  const total = cards.length;
+  const won = cards.filter(c => c.status === 'won').length;
+  const lost = cards.filter(c => c.status === 'lost').length;
+  const inProgress = cards.filter(c => c.status === 'in_progress').length;
+
+  const lostCards = cards.filter(c => c.status === 'lost');
+  const lossGroupCounts = {};
+  lostCards.forEach(card => {
+    const cardTagNames = card.tags?.map(t => t.name) || [];
+    const lossTagsInCard = cardTagNames.filter(t => LOSS_TAGS.includes(t));
+    if (lossTagsInCard.length > 0) {
+      lossTagsInCard.forEach(tag => {
+        lossGroupCounts[tag] = (lossGroupCounts[tag] || 0) + 1;
+      });
+    } else {
+      const otherTag = cardTagNames.length > 0 ? cardTagNames[0] : "Sem etiqueta";
+      lossGroupCounts[otherTag] = (lossGroupCounts[otherTag] || 0) + 1;
+    }
+  });
+  const lossReasons = Object.entries(lossGroupCounts).sort((a, b) => b[1] - a[1]);
+
+  const returnCards = cards.filter(c => c.tags?.some(t => t.name === "IA - Retorno"));
+  const returnWon = returnCards.filter(c => c.status === 'won').length;
+  const returnLost = returnCards.filter(c => c.status === 'lost').length;
+  const lostReturnCards = returnCards.filter(c => c.status === 'lost');
+  const returnReasonsCounts = {};
+  lostReturnCards.forEach(card => {
+    const cardTagNames = card.tags?.map(t => t.name) || [];
+    const lossTag = cardTagNames.find(t => LOSS_TAGS.includes(t)) || "Outro / Sem tag específica";
+    returnReasonsCounts[lossTag] = (returnReasonsCounts[lossTag] || 0) + 1;
+  });
+  const returnLossReasons = Object.entries(returnReasonsCounts).sort((a, b) => b[1] - a[1]);
+
+  const inconsistencies = cards.filter(card => {
+    const tagNames = card.tags?.map(t => t.name) || [];
+    const hasWinTag = tagNames.some(t => WIN_TAGS.includes(t));
+    const hasLossTag = tagNames.some(t => LOSS_TAGS.includes(t) && !["IA - Server Error", "IA - Erro fluxo"].includes(t));
+    const isStatusWon = card.status === 'won';
+    const isStatusLost = card.status === 'lost';
+
+    if (hasWinTag && hasLossTag) return true;
+    if (isStatusWon && hasLossTag) return true;
+    if (isStatusLost && hasWinTag) return true;
+    return false;
+  }).map(card => {
+    const tagNames = card.tags?.map(t => t.name) || [];
+    const hasWinTag = tagNames.some(t => WIN_TAGS.includes(t));
+    const hasLossTag = tagNames.some(t => LOSS_TAGS.includes(t) && !["IA - Server Error", "IA - Erro fluxo"].includes(t));
+
+    let reason = "Conflito desconhecido";
+    if (hasWinTag && hasLossTag) {
+      reason = "Cartão possui tags de Ganho e de Perda simultaneamente.";
+    } else if (card.status === 'won' && hasLossTag) {
+      reason = "Cartão está marcado como Ganho, mas possui tag de Perda.";
+    } else if (card.status === 'lost' && hasWinTag) {
+      reason = "Cartão está marcado como Perdido, mas possui tag de Ganho.";
+    }
+
+    return {
+      id: card.id,
+      name: card.name,
+      campaign: card.campaign,
+      reason,
+      status: card.status,
+      tags: tagNames.join(', ')
+    };
+  });
+
+  return {
+    total, won, lost, inProgress,
+    returnTotal: returnCards.length, returnWon, returnLost,
+    lossReasons, returnLossReasons, inconsistencies
+  };
+};
+
 // --- Helper: Process Single Campaign (Fetch/Cache) ---
 const processCampaign = async (campaignName, boardId, boardName, filters, forceRefresh = false) => {
   if (!forceRefresh) {
@@ -462,6 +576,7 @@ const processCampaign = async (campaignName, boardId, boardName, filters, forceR
   const cards = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/cards`, queryParams);
   const filteredCards = cards.filter(c => c.campaign === campaignName);
   const summary = calculateSummary(filteredCards, boardName || 'Unknown Board');
+  const lossAnalysis = calculateLossAnalysis(filteredCards);
 
   await db.run(
     `INSERT OR REPLACE INTO campaign_summaries (
@@ -478,6 +593,19 @@ const processCampaign = async (campaignName, boardId, boardName, filters, forceR
       summary._raw.salesManual, summary._raw.notReceivedMsg,
       summary.totalCost, summary.averageSold, summary.responseRate,
       summary.conversionSalesClients, summary.conversionSalesResponses
+    ]
+  );
+
+  await db.run(
+    `INSERT OR REPLACE INTO loss_analysis_summaries (
+      campaign_name, board_id, total_cards, in_progress, won, lost, 
+      return_total, return_won, return_lost, loss_reasons, return_loss_reasons, 
+      inconsistencies, last_updated
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`,
+    [
+      campaignName, boardId, lossAnalysis.total, lossAnalysis.inProgress, lossAnalysis.won, lossAnalysis.lost,
+      lossAnalysis.returnTotal, lossAnalysis.returnWon, lossAnalysis.returnLost,
+      JSON.stringify(lossAnalysis.lossReasons), JSON.stringify(lossAnalysis.returnLossReasons), JSON.stringify(lossAnalysis.inconsistencies)
     ]
   );
 
@@ -559,6 +687,64 @@ const aggregateSummaries = (summaries) => {
     conversionSalesResponses: formatPercent(conversionSalesResponsesVal),
     lastUpdated: summaries[0].lastUpdated, // Just pick one or finding the min/max?
     fromCache: summaries.every(s => s.fromCache)
+  };
+};
+
+// --- Helper: Aggregate Loss Analysis ---
+const aggregateLossAnalysis = (summaries) => {
+  if (summaries.length === 0) return null;
+  if (summaries.length === 1) return summaries[0];
+
+  const aggregated = {
+    total: 0,
+    inProgress: 0,
+    won: 0,
+    lost: 0,
+    returnTotal: 0,
+    returnWon: 0,
+    returnLost: 0,
+    lossReasonsMap: {},
+    returnLossReasonsMap: {},
+    inconsistencies: [],
+    fromCache: summaries.every(s => s.fromCache)
+  };
+
+  summaries.forEach(s => {
+    aggregated.total += s.total || 0;
+    aggregated.inProgress += s.inProgress || 0;
+    aggregated.won += s.won || 0;
+    aggregated.lost += s.lost || 0;
+    aggregated.returnTotal += s.returnTotal || 0;
+    aggregated.returnWon += s.returnWon || 0;
+    aggregated.returnLost += s.returnLost || 0;
+
+    const lr = s.lossReasons || [];
+    lr.forEach(([reason, count]) => {
+      aggregated.lossReasonsMap[reason] = (aggregated.lossReasonsMap[reason] || 0) + count;
+    });
+
+    const rlr = s.returnLossReasons || [];
+    rlr.forEach(([reason, count]) => {
+      aggregated.returnLossReasonsMap[reason] = (aggregated.returnLossReasonsMap[reason] || 0) + count;
+    });
+
+    if (s.inconsistencies && s.inconsistencies.length > 0) {
+      aggregated.inconsistencies = aggregated.inconsistencies.concat(s.inconsistencies);
+    }
+  });
+
+  return {
+    total: aggregated.total,
+    inProgress: aggregated.inProgress,
+    won: aggregated.won,
+    lost: aggregated.lost,
+    returnTotal: aggregated.returnTotal,
+    returnWon: aggregated.returnWon,
+    returnLost: aggregated.returnLost,
+    lossReasons: Object.entries(aggregated.lossReasonsMap).sort((a, b) => b[1] - a[1]),
+    returnLossReasons: Object.entries(aggregated.returnLossReasonsMap).sort((a, b) => b[1] - a[1]),
+    inconsistencies: aggregated.inconsistencies,
+    fromCache: aggregated.fromCache
   };
 };
 
@@ -712,6 +898,90 @@ app.post('/api/campaign-summary/refresh', authenticateToken, async (req, res) =>
   } catch (error) {
     console.error('Error refreshing summary:', error);
     res.status(500).json({ message: 'Error refreshing summary', error: error.message });
+  }
+});
+
+// Loss Analysis Endpoint
+app.get('/api/loss-analysis', authenticateToken, async (req, res) => {
+  const { campaign, board, startDate, endDate, source, tags } = req.query;
+
+  if (!campaign) {
+    return res.status(400).json({ message: 'Campaign name is required for loss analysis.' });
+  }
+
+  const boardId = board || process.env.BOARD_ID_HABLLA;
+  const campaignList = campaign.split(',');
+
+  const filters = {};
+  if (startDate && endDate) {
+    filters.created_at = JSON.stringify({ start_date: startDate, end_date: endDate });
+  }
+  if (source) filters.source = source;
+  if (tags) filters.tags = tags;
+
+  // Se houver filtros adicionais além de board/campaign, temos que forçar a busca na API
+  let forceRefresh = !!(startDate && endDate) || !!source || !!tags;
+  if (req.query.forceRefresh === 'true') forceRefresh = true;
+
+  try {
+    const lossSummaries = [];
+    for (const campName of campaignList) {
+      let lossAnalysis = null;
+      if (!forceRefresh) {
+        const cached = await db.get(
+          'SELECT * FROM loss_analysis_summaries WHERE campaign_name = ? AND board_id = ?',
+          [campName.trim(), boardId]
+        );
+        if (cached) {
+          lossAnalysis = {
+            total: cached.total_cards,
+            inProgress: cached.in_progress,
+            won: cached.won,
+            lost: cached.lost,
+            returnTotal: cached.return_total,
+            returnWon: cached.return_won,
+            returnLost: cached.return_lost,
+            lossReasons: JSON.parse(cached.loss_reasons),
+            returnLossReasons: JSON.parse(cached.return_loss_reasons),
+            inconsistencies: JSON.parse(cached.inconsistencies),
+            fromCache: true
+          };
+        }
+      }
+
+      if (!lossAnalysis) {
+        // Fetch from API and save to db via processCampaign
+        await processCampaign(campName.trim(), boardId, 'Board Agendado', filters, true);
+        const cached = await db.get(
+          'SELECT * FROM loss_analysis_summaries WHERE campaign_name = ? AND board_id = ?',
+          [campName.trim(), boardId]
+        );
+        if (cached) {
+          lossAnalysis = {
+            total: cached.total_cards,
+            inProgress: cached.in_progress,
+            won: cached.won,
+            lost: cached.lost,
+            returnTotal: cached.return_total,
+            returnWon: cached.return_won,
+            returnLost: cached.return_lost,
+            lossReasons: JSON.parse(cached.loss_reasons),
+            returnLossReasons: JSON.parse(cached.return_loss_reasons),
+            inconsistencies: JSON.parse(cached.inconsistencies),
+            fromCache: false
+          };
+        }
+      }
+      if (lossAnalysis) {
+        lossSummaries.push(lossAnalysis);
+      }
+    }
+
+    const finalLossSummary = aggregateLossAnalysis(lossSummaries);
+    res.status(200).json(finalLossSummary);
+  } catch (error) {
+    console.error('Error in loss analysis summary:', error);
+    res.status(500).json({ message: 'Error generating loss analysis', error: error.message });
   }
 });
 
@@ -916,7 +1186,7 @@ app.post('/api/database/import', authenticateToken, authorizeAdmin, upload.singl
 
   try {
     const currentDbPath = process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite');
-    
+
     // Desconecta o banco atual
     if (db) {
       await db.close();
@@ -940,8 +1210,8 @@ app.post('/api/database/import', authenticateToken, authorizeAdmin, upload.singl
     console.error('Erro ao importar banco de dados:', error);
     // Tenta reabrir o banco original caso de erro
     try {
-        await initializeDatabase();
-    } catch(e) {}
+      await initializeDatabase();
+    } catch (e) { }
     res.status(500).json({ message: 'Erro interno ao importar o banco.', error: error.message });
   }
 });
@@ -979,7 +1249,7 @@ app.post('/api/database/backups/:filename/restore', authenticateToken, authorize
 
   try {
     const currentDbPath = process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite');
-    
+
     // Desconecta o banco atual
     if (db) {
       await db.close();
@@ -1002,8 +1272,8 @@ app.post('/api/database/backups/:filename/restore', authenticateToken, authorize
   } catch (error) {
     console.error('Erro ao restaurar backup:', error);
     try {
-        await initializeDatabase();
-    } catch(e) {}
+      await initializeDatabase();
+    } catch (e) { }
     res.status(500).json({ message: 'Erro interno ao restaurar o backup.', error: error.message });
   }
 });
@@ -1046,18 +1316,18 @@ const setupCronJob = async () => {
   try {
     const row = await db.get('SELECT value FROM settings WHERE id = ?', ['cron_config']);
     const config = row ? JSON.parse(row.value) : { enabled: true, time: ['00:00'], frequency: '1x por dia' };
-    
+
     currentCronJobs.forEach(job => job.stop());
     currentCronJobs = [];
 
     if (config.enabled && config.time) {
       let times = Array.isArray(config.time) ? config.time : [config.time];
-      
+
       times.forEach(t => {
         if (!t) return;
         const [hour, minute] = t.split(':');
         const cronExpression = `${minute} ${hour} * * *`; // Roda diarimente no minuto e hora marcados
-        
+
         console.log(`[Cron] Agendado para rodar às ${t} (frequencia: ${config.frequency}).`);
         const job = cron.schedule(cronExpression, async () => {
           console.log('[Cron] Iniciando atualização de campanhas agendada...');
@@ -1112,7 +1382,7 @@ app.get('/api/settings/cronjob', authenticateToken, authorizeAdmin, async (req, 
 
 app.post('/api/settings/cronjob', authenticateToken, authorizeAdmin, async (req, res) => {
   const { enabled, time, frequency } = req.body;
-  
+
   if (!time) {
     return res.status(400).json({ message: 'O horário é obrigatório.' });
   }
@@ -1197,4 +1467,4 @@ app.put('/api/users/theme', authenticateToken, async (req, res) => {
 });
 
 // --- Exportações para testes ---
-export { app, initializeDatabase, calculateSummary, aggregateSummaries };
+export { app, initializeDatabase, calculateSummary, aggregateSummaries };

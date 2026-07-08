@@ -1,4 +1,4 @@
-import { LayoutDashboard, FileText, ShoppingCart, Package, Users, BarChart3, Settings, LogOut } from 'lucide-react';
+import { LayoutDashboard, FileText, ShoppingCart, Package, Users, BarChart3, Settings, LogOut, TrendingDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ModeToggle } from '@/components/mode-toggle';
 import logoImg from '@/assets/dash-report.svg';
@@ -20,6 +20,7 @@ export function Sidebar({ activeTab, setActiveTab, isOpen, onClose, user, onLogo
     { id: 'produtos', label: 'Produtos', icon: Package, enabled: false, adminOnly: true },
     { id: 'clientes', label: 'Clientes', icon: Users, enabled: false, adminOnly: true },
     { id: 'analises', label: 'Análises', icon: BarChart3, enabled: false, adminOnly: true },
+    { id: 'perdas', label: 'Análise de Perdas', icon: TrendingDown, enabled: true },
     { id: 'settings', label: 'Configurações', icon: Settings, enabled: user?.role === 'admin', adminOnly: true },
   ];
 

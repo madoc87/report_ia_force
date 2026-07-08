@@ -40,7 +40,7 @@ describe('POST /api/login', () => {
 
     // Verificar no banco de dados se o log foi criado
     const { db } = await import('../helpers/setup.js');
-    const logs = await db.all('SELECT * FROM login_logs WHERE user_email = ? ORDER BY login_time DESC', ['admin@teste.com']);
+    const logs = await db.all('SELECT * FROM login_logs WHERE user_email = ? ORDER BY id DESC', ['admin@teste.com']);
     
     expect(logs.length).toBeGreaterThan(0);
     expect(logs[0].user_name).toBe('Admin Teste');

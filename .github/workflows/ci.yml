@@ -1,0 +1,83 @@
+name: CI - Report IA Force
+
+# 1. GATILHO: Define quando este pipeline deve ser disparado
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+  pull_request:
+    branches: [ main ]
+    # FILTRO DE PATHS: O pipeline só roda se houver mudanças nestas pastas
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # JOB 1: Testes do Frontend
+  test-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      # Baixa o código do repositório para a máquina virtual do GitHub
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      # Configura o ambiente Node.js na máquina virtual
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      # Entra na pasta do frontend, instala e roda os testes
+      - name: Instalar dependências do Frontend
+        run: npm ci
+        working-directory: ./frontend
+
+      - name: Linter do Frontend
+        run: npm run lint
+        working-directory: ./frontend
+
+      - name: Executar testes do Frontend
+        run: npm test
+        working-directory: ./frontend
+
+      # Opcional: Garante que o build do front não quebra antes de aceitar o PR
+      - name: Validar Build do Frontend
+        run: npm run build
+        working-directory: ./frontend
+
+  # JOB 2: Testes do Backend
+  test-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'backend/package-lock.json'
+
+      # Entra na pasta do backend, instala e roda os testes
+      - name: Instalar dependências do Backend
+        run: npm ci
+        working-directory: ./backend
+
+      - name: Executar testes do Backend
+        run: npm test
+        working-directory: ./backend
+        env:
+          PORT: 3005
+          WORKSPACE_ID_HABLLA: "mock_workspace"
+          API_TOKEN_HABLLA: "mock_token"
+          BOARD_ID_HABLLA: "mock_board"
+          JWT_SECRET: "mock_secret"

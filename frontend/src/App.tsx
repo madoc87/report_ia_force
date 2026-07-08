@@ -25,6 +25,7 @@ import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Login } from '@/components/login';
 import { ChangePassword } from '@/components/change-password';
 import { Settings } from '@/components/settings';
+import { LossAnalysis } from '@/components/loss-analysis';
 import { getBaseUrl } from '@/lib/config';
 
 // Definição de Tipos para os dados da API
@@ -796,6 +797,15 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
                   .then(res => res.json())
                   .then(data => setCampaignsData(data));
               }}
+            />
+          ) : activeTab === 'perdas' ? (
+            <LossAnalysis
+              onMenuClick={() => setIsSidebarOpen(true)}
+              notifications={notifications}
+              setNotifications={setNotifications}
+              user={user}
+              onLogout={handleLogout}
+              campaignsData={campaignsData}
             />
           ) : (
             <div className="container mx-auto p-4 md:p-8 space-y-8">
