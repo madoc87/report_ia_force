@@ -22,10 +22,12 @@ A aplicação foi preparada arquiteturalmente para rodar de forma isolada tanto 
   - **Subdirectory (e Root Directory):** Configure com a pasta `/backend`.
 - **Environment (Variáveis Essenciais):**
   - Preencha na plataforma todas as credenciais base que você encontra no arquivo `backend/.env.example` da pasta raiz.
-    - **O que é o `JWT_SECRET`?** É apenas a senha-criptográfica do seu sistema (crie qualquer palavra forte: ex `senha_jwt_029`). O Frontend usará essa proteção para isolar os logins!
+    - **O que é o `JWT_SECRET`?** É a chave que assina os tokens de login. É **obrigatória** e precisa ter no mínimo 32 caracteres aleatórios; sem ela (ou com uma chave fraca) o backend não inicia. Gere uma com `node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"`.
+    - **`ADMIN_EMAIL` / `ADMIN_PASSWORD`:** usadas apenas para criar o primeiro administrador quando o banco não tem nenhum (senha com no mínimo 12 caracteres, troca obrigatória no primeiro acesso). Depois disso são ignoradas; para recuperar o acesso, defina temporariamente `ADMIN_RESET_PASSWORD=true`.
   - *Lembre-se de configurar a variável `DATABASE_PATH` apontando para o disco rígido:* E.g. `DATABASE_PATH=/app/data/database.sqlite`
+  - Recomendado: `CORS_ORIGIN` com a URL do frontend. Opcional: `WEBHOOK_REPORT_URL` para habilitar o envio do resumo por webhook.
 - **Mounts / Volumes:**
-  - Crie um Volume na página de _Mounts_ apontando para o diretório `/app/data`. Assim toda a informação do SQLite sobreviverá aos deploys!
+  - Crie um Volume na página de _Mounts_ apontando para o diretório `/app/data`. Assim toda a informação do SQLite sobreviverá aos deploys! Os backups do banco ficam em `/app/data/backups`, no mesmo volume.
 - **Network / Portas:**
   - Exponha localmente pela porta do container `3005` e crie em cima do Domínio público (ex: `api.dominio.com.br`) na interface de Domains gerando os proxies do Let's Encrypt padrão.
 

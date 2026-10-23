@@ -808,3 +808,41 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
   - Implementada paginação nativa na tabela de campanhas do Dashboard, exibindo 15 itens por página para melhorar a performance de renderização e evitar a criação de uma página excessivamente longa.
   - Adicionados controles de navegação ("Anterior" e "Próxima") e indicador de página no rodapé da tabela.
   - A paginação é redefinida para a primeira página automaticamente ao alterar qualquer filtro.
+
+## 46. Correções de Segurança da Aplicação (19/10/2026)
+
+- **Configuração segura obrigatória (S1):**
+  - O backend não inicia mais sem `JWT_SECRET` ou com uma chave fraca (menos de 32 caracteres ou valores de exemplo conhecidos). O fallback `secret123` foi removido.
+  - Removida a criação automática do usuário padrão `admin@mf.com` / `admin123` e a variável `APP_PASSWORD`. Se o banco não tiver administrador e `ADMIN_EMAIL`/`ADMIN_PASSWORD` não estiverem definidos, o servidor encerra com uma mensagem explicativa.
+  - `ADMIN_EMAIL`/`ADMIN_PASSWORD` agora só criam o primeiro administrador (senha mínima de 12 caracteres e troca obrigatória no primeiro acesso). A senha não é mais sobrescrita a cada reinício; a recuperação de acesso passou a ser explícita via `ADMIN_RESET_PASSWORD=true`.
+- **Arquivos de banco e backups (S2):**
+  - Rotas de restaurar e excluir backup validam o nome do arquivo e impedem acesso fora da pasta de backups (path traversal com `..%2F`).
+  - Importação aceita apenas `.sqlite`, `.sqlite3` e `.db`, com limite de tamanho (`MAX_DB_UPLOAD_MB`, padrão 200 MB). O conteúdo é validado: cabeçalho SQLite, verificação de integridade, tabelas obrigatórias da aplicação, ausência de triggers e existência de ao menos um administrador. A mesma validação é aplicada ao restaurar um backup.
+  - A troca do banco usa cópia (em vez de mover), funciona entre volumes diferentes, volta ao banco anterior em caso de falha e bloqueia operações simultâneas (respostas 503/409 durante a troca).
+  - Backups passam a ficar ao lado do banco (`/app/data/backups` no EasyPanel), dentro do volume persistente, configurável por `BACKUPS_PATH`. Uploads temporários vão para a pasta temporária do sistema e são sempre removidos.
+- **Webhook de relatório (S3):**
+  - Removida a URL fixa do webhook do código do frontend. O envio passou a ser feito pelo backend (`POST /api/integrations/webhook/report`, somente administrador), usando `WEBHOOK_REPORT_URL` e o token opcional `WEBHOOK_REPORT_TOKEN`.
+  - Sem a variável configurada, o botão de webhook fica visível, porém desabilitado, com aviso de que a funcionalidade não está habilitada. Sucesso e erro do envio agora são exibidos ao usuário.
+- **Troca de senha obrigatória (S4):**
+  - A exigência passou a ser validada no backend: enquanto estiver pendente, todas as rotas respondem `403 PASSWORD_CHANGE_REQUIRED`, exceto a troca de senha e a preferência de tema. O frontend volta automaticamente para a tela de troca de senha.
+  - Nova senha precisa ter no mínimo 6 caracteres e ser diferente da atual (também validado no backend, inclusive no cadastro e na redefinição feitos pelo administrador).
+  - Trocar ou redefinir a senha encerra as sessões abertas com a senha antiga (`token_version`), e tokens de usuários removidos deixam de funcionar imediatamente.
+- **Permissões por perfil no backend (S5):**
+  - Papel e situação do usuário são lidos do banco a cada requisição; alterar o `localStorage` não concede acesso.
+  - Somente administrador: `/api/cards`, `/api/tags`, `/api/sectors`, `/api/lists`, notificações do sistema (`/api/sys-logs`) e webhook. Administrador e Gestor: atualização de campanhas (`/api/campaign-summary/refresh`).
+  - Gestor e Analista consultam apenas o quadro padrão (`BOARD_ID_HABLLA`), sem filtros, como já ocorria na interface.
+  - Cadastro de usuário aceita apenas os perfis `admin`, `gestor` e `user`.
+  - Removida a rota `/api/all-summaries`, que não era usada e sempre retornava erro.
+- **Parâmetros enviados à Hablla (S6):**
+  - IDs de quadro são validados (formato de ID da Hablla) antes de entrarem na URL da API externa, impedindo o acesso a outros endpoints com o token do servidor. A quantidade de campanhas por requisição é limitada a 100.
+- **Login e códigos de erro (S7):**
+  - Limite de tentativas no servidor: 5 falhas por conta/IP ou 20 por IP em 15 minutos bloqueiam o login por 15 minutos (`429 TOO_MANY_ATTEMPTS`, com `Retry-After`). O usuário é avisado quando restam 2 tentativas ou menos. Apagar o `localStorage` não contorna o bloqueio.
+  - Tempo de resposta do login igual para e-mails existentes e inexistentes, evitando a descoberta de contas cadastradas.
+  - IP real do cliente obtido via `trust proxy` (`TRUST_PROXY`, padrão 1), também usado no histórico de acessos (antes o cabeçalho `X-Forwarded-For` era gravado sem validação).
+  - Respostas de erro padronizadas com `code` e `message`: `401` para sessão ausente, inválida, expirada ou revogada (`TOKEN_MISSING`, `TOKEN_INVALID`, `TOKEN_EXPIRED`, `SESSION_REVOKED`, `USER_NOT_FOUND`) e `403` para falta de permissão (`FORBIDDEN_ROLE`, `PASSWORD_CHANGE_REQUIRED`). O frontend só encerra a sessão em `401`; em `403` exibe a mensagem sem deslogar.
+- **Outros reforços:**
+  - CORS restringível pela variável `CORS_ORIGIN`.
+  - Cabeçalhos de segurança no nginx do frontend (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`) e ocultação da versão do nginx.
+  - Dependências atualizadas via `npm audit fix` (sem mudanças de versão principal): backend (`multer`, `path-to-regexp`, `qs`, `body-parser` e outras) e frontend (`dompurify` em produção; `vite`, `vitest`, `postcss`, `rollup` e outras ferramentas de build). Os alertas restantes do frontend estão apenas em ferramentas de desenvolvimento e exigem atualizações de versão principal (Vite 7, Tailwind 4, typescript-eslint 8), planejadas para uma etapa separada.
+- **Testes:**
+  - Novo arquivo `backend/__tests__/integration/security.test.js` (34 testes) e `frontend/src/__tests__/unit/api.test.ts`. Testes de autenticação atualizados para os novos códigos de status.
