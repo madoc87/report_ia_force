@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getBaseUrl } from '@/lib/config';
+import { handleAuthErrors } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -113,10 +114,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
           }
         });
 
-        if (response.status === 401 || response.status === 403) {
-          onLogout?.();
-          throw new Error('Sessão expirada. Por favor, faça login novamente.');
-        }
+        await handleAuthErrors(response, onLogout);
 
         if (!response.ok) throw new Error('Failed to fetch dashboard data');
         const json = await response.json();

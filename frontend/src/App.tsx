@@ -26,6 +26,7 @@ import { Login } from '@/components/login';
 import { ChangePassword } from '@/components/change-password';
 import { Settings } from '@/components/settings';
 import { getBaseUrl } from '@/lib/config';
+import { handleAuthErrors, PASSWORD_CHANGE_REQUIRED_EVENT } from '@/lib/api';
 
 // Definição de Tipos para os dados da API
 
@@ -147,7 +148,22 @@ function App() {
     }
   }, []);
 
-  // Custom fetch wrapper para injetar o token e tratar expirações (401/403)
+  // O backend recusa as requisições (403 PASSWORD_CHANGE_REQUIRED) enquanto a troca de senha
+  // obrigatória estiver pendente; nesse caso volta para a tela de troca de senha.
+  useEffect(() => {
+    const onPasswordChangeRequired = () => {
+      setUser((prev: any) => {
+        if (!prev) return prev;
+        const updated = { ...prev, force_password_change: true };
+        localStorage.setItem('user', JSON.stringify(updated));
+        return updated;
+      });
+    };
+    window.addEventListener(PASSWORD_CHANGE_REQUIRED_EVENT, onPasswordChangeRequired);
+    return () => window.removeEventListener(PASSWORD_CHANGE_REQUIRED_EVENT, onPasswordChangeRequired);
+  }, []);
+
+  // Custom fetch wrapper para injetar o token e tratar sessão inválida (401) e falta de permissão (403)
   const apiFetch = async (url: string, options: RequestInit = {}) => {
     const currentToken = localStorage.getItem('token');
 
@@ -172,12 +188,7 @@ function App() {
       }
     });
 
-    if (response.status === 401 || response.status === 403) {
-      handleLogout();
-      throw new Error('Sessão expirada. Por favor, faça login novamente.');
-    }
-
-    return response;
+    return handleAuthErrors(response, handleLogout);
   };
 
   const addNotification = (notif: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
@@ -206,21 +217,24 @@ function App() {
     const fetchData = async () => {
       let errors: string[] = [];
 
-      try {
-        const tagsResponse = await apiFetch(`${BASE_URL}/api/tags`);
-        if (!tagsResponse.ok) {
-          const errorData = await tagsResponse.json().catch(() => ({}));
-          throw new Error(`API Hablla (Tags): ${errorData.error || errorData.message || tagsResponse.statusText}`);
+      // Etiquetas da Hablla só são usadas no filtro exclusivo do administrador
+      if (user?.role === 'admin') {
+        try {
+          const tagsResponse = await apiFetch(`${BASE_URL}/api/tags`);
+          if (!tagsResponse.ok) {
+            const errorData = await tagsResponse.json().catch(() => ({}));
+            throw new Error(`API Hablla (Tags): ${errorData.error || errorData.message || tagsResponse.statusText}`);
+          }
+          const tagsData: Tag[] = await tagsResponse.json();
+          if (Array.isArray(tagsData)) {
+            setTags(tagsData);
+          } else if ((tagsData as any).results && Array.isArray((tagsData as any).results)) {
+            setTags((tagsData as any).results);
+          }
+        } catch (error: any) {
+          errors.push(error.message || 'Erro ao buscar tags da Hablla.');
+          console.error('Error fetching tags:', error);
         }
-        const tagsData: Tag[] = await tagsResponse.json();
-        if (Array.isArray(tagsData)) {
-          setTags(tagsData);
-        } else if ((tagsData as any).results && Array.isArray((tagsData as any).results)) {
-          setTags((tagsData as any).results);
-        }
-      } catch (error: any) {
-        errors.push(error.message || 'Erro ao buscar tags da Hablla.');
-        console.error('Error fetching tags:', error);
       }
 
       try {
@@ -248,9 +262,9 @@ function App() {
   }, [token]);
 
   // Efeito adicional dedicado apenas à busca de Notificações do Sistema / Logs Backend
-  // Roda logo ao logar e a cada 60s
+  // Roda logo ao logar e a cada 60s (somente administradores recebem as notificações do sistema)
   useEffect(() => {
-    if (!token) return;
+    if (!token || user?.role !== 'admin') return;
 
     const fetchSysLogs = async () => {
       try {
@@ -292,7 +306,19 @@ function App() {
     fetchSysLogs();
     const intervalId = setInterval(fetchSysLogs, 60000);
     return () => clearInterval(intervalId);
-  }, [token, BASE_URL]);
+  }, [token, BASE_URL, user?.role]);
+
+  // Verifica se o envio por webhook está habilitado no servidor (variável WEBHOOK_REPORT_URL)
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [isSendingWebhook, setIsSendingWebhook] = useState(false);
+  useEffect(() => {
+    if (!token || user?.role !== 'admin') return;
+
+    apiFetch(`${BASE_URL}/api/integrations/webhook`)
+      .then(res => (res.ok ? res.json() : { enabled: false }))
+      .then(data => setWebhookEnabled(Boolean(data.enabled)))
+      .catch(() => setWebhookEnabled(false));
+  }, [token, BASE_URL, user?.role]);
 
   // Efeito para buscar listas quando o quadro mudar
   /*
@@ -686,12 +712,17 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
 
 
 
-  // Função Webhook de enviar
+  // Envia o resumo ao webhook configurado no servidor (WEBHOOK_REPORT_URL).
+  // A URL nunca fica no navegador: o backend faz a chamada e valida a permissão de administrador.
   const handleSendWebhook = async () => {
     if (!campaignSummary) return;
 
+    if (!webhookEnabled) {
+      setError('O envio por webhook não está habilitado. Configure a variável WEBHOOK_REPORT_URL no backend.');
+      return;
+    }
+
     const payload = {
-      origem: "report_ia_force",
       board: campaignSummary.board,
       campanha: campaignSummary.campaignNames,
       dt_envio: campaignSummary.dateRange,
@@ -706,26 +737,27 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
       mgs_enviada: getWebhookMessage(),
     };
 
-    try {
-      const response = await fetch(
-        "https://infra-n8nserver.mundodosfiltros.com.br/webhook/8b4f62ae-ba89-4e5f-ad6a-2e019ffb22e4",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        }
-      );
+    setIsSendingWebhook(true);
+    setError(null);
+    setSuccessMessage(null);
 
-      if (response.ok) {
-        console.log("Webhook enviado com sucesso!");
-        // opcional: feedback pro usuário
-      } else {
-        console.error("Erro ao enviar webhook:", response.statusText);
+    try {
+      const response = await apiFetch(`${BASE_URL}/api/integrations/webhook/report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || 'Falha ao enviar o resumo pelo webhook.');
       }
-    } catch (error) {
-      console.error("Erro na requisição do webhook:", error);
+
+      setSuccessMessage(data.message || 'Resumo enviado com sucesso.');
+    } catch (error: any) {
+      setError(error.message || 'Falha ao enviar o resumo pelo webhook.');
+    } finally {
+      setIsSendingWebhook(false);
     }
   };
 
@@ -1060,9 +1092,31 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
                       </Button>
                       {/* Botão enviar webhook */}
                       {user?.role === 'admin' && (
-                        <Button variant="ghost" size="icon" onClick={handleSendWebhook} title="Enviar Webhook">
-                          <Webhook className='h-4 w-4' />
-                        </Button>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              {/* O span mantém o tooltip funcionando mesmo com o botão desabilitado */}
+                              <span tabIndex={webhookEnabled ? -1 : 0}>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={handleSendWebhook}
+                                  disabled={!webhookEnabled || isSendingWebhook}
+                                  aria-label="Enviar Webhook"
+                                >
+                                  <Webhook className='h-4 w-4' />
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>
+                                {webhookEnabled
+                                  ? (isSendingWebhook ? 'Enviando...' : 'Enviar Webhook')
+                                  : 'Funcionalidade não habilitada (configure WEBHOOK_REPORT_URL no backend)'}
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       )}
                     </div>
                   </CardHeader>

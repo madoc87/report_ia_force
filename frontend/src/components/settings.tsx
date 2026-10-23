@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { getBaseUrl } from '@/lib/config';
+import { handleAuthErrors } from '@/lib/api';
 import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -117,11 +118,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
 
     const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
         const response = await fetch(url, options);
-        if (response.status === 401 || response.status === 403) {
-            onLogout?.();
-            throw new Error('Sessão expirada. Por favor, faça login novamente.');
-        }
-        return response;
+        return handleAuthErrors(response, onLogout);
     };
 
     const fetchUsers = async () => {
@@ -331,10 +328,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                 body: formData
             });
 
-            if (response.status === 401 || response.status === 403) {
-                onLogout?.();
-                throw new Error('Sessão expirada. Por favor, faça login novamente.');
-            }
+            await handleAuthErrors(response, onLogout);
 
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || 'Erro ao importar banco de dados.');
@@ -354,7 +348,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
         if (!confirm(`Deseja realmente excluir o backup ${filename}?`)) return;
 
         try {
-            const response = await fetchWithAuth(`${BASE_URL}/api/database/backups/${filename}`, {
+            const response = await fetchWithAuth(`${BASE_URL}/api/database/backups/${encodeURIComponent(filename)}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -373,7 +367,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
 
         try {
             setIsImporting(true);
-            const response = await fetchWithAuth(`${BASE_URL}/api/database/backups/${filename}/restore`, {
+            const response = await fetchWithAuth(`${BASE_URL}/api/database/backups/${encodeURIComponent(filename)}/restore`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
