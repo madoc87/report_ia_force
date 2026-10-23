@@ -9,57 +9,238 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import cron from 'node-cron';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const upload = multer({ dest: path.join(__dirname, 'tmp-uploads') });
-const backupsDir = path.join(__dirname, 'backups');
+const isTestEnv = process.env.NODE_ENV === 'test';
 
-if (!fs.existsSync(backupsDir)) {
-  fs.mkdirSync(backupsDir, { recursive: true });
+// --- Caminhos de dados ---
+// O banco e os backups ficam no mesmo diretório persistente (ex.: volume /app/data no EasyPanel),
+// assim os backups sobrevivem aos deploys e as cópias não cruzam sistemas de arquivos.
+const DB_PATH = path.resolve(process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite'));
+const backupsDir = path.resolve(process.env.BACKUPS_PATH || path.join(path.dirname(DB_PATH), 'backups'));
+const uploadsTmpDir = path.join(os.tmpdir(), 'report-ia-force-uploads');
+
+for (const dir of [backupsDir, uploadsTmpDir]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
+
+const DB_FILE_EXTENSIONS = ['.sqlite', '.sqlite3', '.db'];
+const MAX_DB_UPLOAD_MB = Number(process.env.MAX_DB_UPLOAD_MB) || 200;
+
+const upload = multer({
+  dest: uploadsTmpDir,
+  limits: { fileSize: MAX_DB_UPLOAD_MB * 1024 * 1024, files: 1, fields: 5 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (!DB_FILE_EXTENSIONS.includes(ext)) {
+      const err = new Error(`Extensão de arquivo não permitida. Use: ${DB_FILE_EXTENSIONS.join(', ')}`);
+      err.code = 'INVALID_FILE_TYPE';
+      return cb(err);
+    }
+    cb(null, true);
+  }
+});
 
 const app = express();
 const port = process.env.PORT || 3005;
 
+// Quantidade de proxies reversos confiáveis à frente do backend (Traefik do EasyPanel = 1).
+// Necessário para obter o IP real do cliente (req.ip) no limite de tentativas de login e nos logs de acesso.
+const parseTrustProxy = (value) => {
+  if (value === undefined || value === '') return 1;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return /^\d+$/.test(value) ? Number(value) : value;
+};
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
+
 app.use(helmet());
-app.use(cors());
+
+// CORS: se CORS_ORIGIN estiver definido (lista separada por vírgula), apenas essas origens são aceitas.
+const corsOrigins = (process.env.CORS_ORIGIN || '').split(',').map(o => o.trim()).filter(Boolean);
+if (corsOrigins.length === 0 && !isTestEnv) {
+  console.warn('[Segurança] CORS_ORIGIN não definido: o backend aceitará requisições de qualquer origem.');
+}
+app.use(cors(corsOrigins.length > 0 ? { origin: corsOrigins } : undefined));
 app.use(express.json());
 
 const HABLLA_API_URL = 'https://api.hablla.com';
-const { WORKSPACE_ID_HABLLA, API_TOKEN_HABLLA, APP_PASSWORD, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD } = process.env;
+const { WORKSPACE_ID_HABLLA, API_TOKEN_HABLLA, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD } = process.env;
 
-const jwtSecret = JWT_SECRET || 'secret123';
+// ID do quadro padrão (IA Manutenção). Usuários não administradores só acessam este quadro.
+const DEFAULT_BOARD_ID = process.env.BOARD_ID_HABLLA || '682251a6c5a42b757a5dbe79';
+const HABLLA_ID_REGEX = /^[a-f0-9]{24}$/i;
+
+// --- Validação de segredos obrigatórios ---
+// Em produção a aplicação não sobe sem um JWT_SECRET forte, evitando um deploy mal configurado
+// com uma chave previsível (qualquer pessoa poderia forjar um token de administrador).
+const JWT_SECRET_MIN_LENGTH = 32;
+const KNOWN_WEAK_SECRETS = ['secret123', 'chave_secreta_jwt_123', 'mock_secret', 'changeme', 'secret'];
+
+const resolveJwtSecret = () => {
+  if (isTestEnv) return JWT_SECRET || 'secret123';
+
+  if (!JWT_SECRET) {
+    console.error('[Segurança] JWT_SECRET não definido. Defina uma chave aleatória com no mínimo 32 caracteres. Encerrando.');
+    process.exit(1);
+  }
+  if (JWT_SECRET.length < JWT_SECRET_MIN_LENGTH || KNOWN_WEAK_SECRETS.includes(JWT_SECRET)) {
+    console.error(`[Segurança] JWT_SECRET fraco: use uma chave aleatória com no mínimo ${JWT_SECRET_MIN_LENGTH} caracteres. Encerrando.`);
+    process.exit(1);
+  }
+  return JWT_SECRET;
+};
+
+const jwtSecret = resolveJwtSecret();
+const JWT_ALGORITHM = 'HS256';
+const JWT_EXPIRES_IN = '12h';
+
+const VALID_ROLES = ['admin', 'gestor', 'user'];
+const PASSWORD_MIN_LENGTH = 6;
+const ADMIN_PASSWORD_MIN_LENGTH = 12;
 
 // Log para verificar as variáveis de ambiente
 console.log('Workspace ID:', WORKSPACE_ID_HABLLA ? 'Carregado' : 'Não encontrado');
 console.log('API Token:', API_TOKEN_HABLLA ? 'Carregado' : 'Não encontrado');
 
-// Middleware de Autenticação
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+// Resposta de erro padronizada: `code` permite identificar a causa exata, `message` é exibida ao usuário.
+const sendError = (res, status, code, message, extra = {}) => res.status(status).json({ code, message, ...extra });
 
-  if (token == null) return res.status(401).json({ message: 'Token de autenticação não fornecido' });
+// Enquanto o banco é substituído (importação/restauração), as requisições recebem 503
+// em vez de falharem com o banco fechado. A própria importação/restauração verifica a flag na rota.
+let dbSwapInProgress = false;
+app.use('/api', (req, res, next) => {
+  if (dbSwapInProgress) {
+    return sendError(res, 503, 'DB_MAINTENANCE', 'O banco de dados está sendo substituído. Tente novamente em alguns segundos.');
+  }
+  next();
+});
 
-  jwt.verify(token, jwtSecret, (err, decodedUser) => {
-    if (err) return res.status(403).json({ message: 'Token de autenticação inválido' });
-    req.user = decodedUser;
-    next();
+// Monta o payload do token/usuário a partir do registro do banco.
+// `tv` (token_version) é incrementado a cada troca/redefinição de senha, invalidando sessões antigas.
+const buildUserPayload = (user) => ({
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  theme: user.theme || 'dark',
+  force_password_change: user.force_password_change === 1
+});
+
+const signUserToken = (user) =>
+  jwt.sign({ ...buildUserPayload(user), tv: user.token_version || 0 }, jwtSecret, {
+    algorithm: JWT_ALGORITHM,
+    expiresIn: JWT_EXPIRES_IN
   });
+
+// Middleware de Autenticação
+// O token só prova a identidade; papel, troca de senha obrigatória e validade da sessão
+// são sempre conferidos no banco, então alterar o localStorage no navegador não concede acesso.
+const authenticate = ({ allowPendingPasswordChange = false } = {}) => async (req, res, next) => {
+  const authHeader = req.headers['authorization'] || '';
+  const [scheme, token] = authHeader.split(' ');
+
+  if (!token || scheme !== 'Bearer') {
+    return sendError(res, 401, 'TOKEN_MISSING', 'Token de autenticação não fornecido.');
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, jwtSecret, { algorithms: [JWT_ALGORITHM] });
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return sendError(res, 401, 'TOKEN_EXPIRED', 'Sessão expirada. Por favor, faça login novamente.');
+    }
+    return sendError(res, 401, 'TOKEN_INVALID', 'Sessão inválida. Por favor, faça login novamente.');
+  }
+
+  try {
+    const user = await db.get(
+      'SELECT id, name, email, role, theme, force_password_change, token_version FROM users WHERE id = ?',
+      [decoded.id]
+    );
+
+    if (!user) {
+      return sendError(res, 401, 'USER_NOT_FOUND', 'Usuário não encontrado ou removido. Faça login novamente.');
+    }
+    if ((decoded.tv || 0) !== (user.token_version || 0)) {
+      return sendError(res, 401, 'SESSION_REVOKED', 'Sua senha foi alterada. Por favor, faça login novamente.');
+    }
+
+    req.user = buildUserPayload(user);
+
+    if (req.user.force_password_change && !allowPendingPasswordChange) {
+      return sendError(res, 403, 'PASSWORD_CHANGE_REQUIRED', 'É obrigatório trocar a senha antes de continuar.');
+    }
+
+    next();
+  } catch (error) {
+    console.error('Erro ao validar sessão:', error);
+    return sendError(res, 500, 'AUTH_ERROR', 'Erro ao validar a sessão.');
+  }
+};
+
+const authenticateToken = authenticate();
+
+// Middleware de autorização por papel (admin, gestor, user)
+const ROLE_LABELS = { admin: 'Administrador', gestor: 'Gestor', user: 'Analista' };
+const authorizeRoles = (...roles) => (req, res, next) => {
+  if (req.user && roles.includes(req.user.role)) return next();
+  const label = ROLE_LABELS[req.user?.role] || req.user?.role || 'desconhecido';
+  return sendError(res, 403, 'FORBIDDEN_ROLE', `Acesso negado. O perfil ${label} não tem permissão para esta ação.`);
 };
 
 // Middleware para autorizar apenas administradores
-const authorizeAdmin = (req, res, next) => {
-  if (req.user && req.user.role === 'admin') {
-    next();
-  } else {
-    res.status(403).json({ message: 'Acesso negado. Apenas administradores podem realizar esta ação.' });
-  }
+const authorizeAdmin = authorizeRoles('admin');
+
+// --- Limite de tentativas de login (no servidor, não depende do navegador) ---
+// Bloqueia por combinação IP + e-mail e também por IP, para dificultar força bruta
+// sem permitir que um atacante bloqueie a conta de outra pessoa a partir de outro IP.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILS_PER_ACCOUNT = 5;
+const LOGIN_MAX_FAILS_PER_IP = 20;
+const loginAttempts = new Map();
+
+const getAttempt = (key, now) => {
+  const entry = loginAttempts.get(key);
+  if (!entry || (entry.blockedUntil <= now && now - entry.firstFailAt > LOGIN_WINDOW_MS)) return null;
+  return entry;
 };
+
+const registerLoginFailure = (key, maxFails, now) => {
+  let entry = getAttempt(key, now);
+  if (!entry || (entry.blockedUntil && entry.blockedUntil <= now)) {
+    entry = { count: 0, firstFailAt: now, blockedUntil: 0 };
+  }
+  entry.count += 1;
+  if (entry.count >= maxFails) entry.blockedUntil = now + LOGIN_WINDOW_MS;
+  loginAttempts.set(key, entry);
+  return entry;
+};
+
+const getLoginBlock = (keys, now) => {
+  const blockedUntil = Math.max(0, ...keys.map(k => getAttempt(k, now)?.blockedUntil || 0));
+  return blockedUntil > now ? blockedUntil : 0;
+};
+
+const resetLoginRateLimiter = () => loginAttempts.clear();
+
+// Limpeza periódica para não acumular entradas em memória
+setInterval(() => {
+  const now = Date.now();
+  for (const key of loginAttempts.keys()) {
+    if (!getAttempt(key, now)) loginAttempts.delete(key);
+  }
+}, LOGIN_WINDOW_MS).unref();
+
+// Hash fictício usado quando o e-mail não existe, para que o tempo de resposta
+// não revele quais e-mails estão cadastrados.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('dummy-password-for-timing', 10);
 
 // Rota de Teste de Status do Servidor
 app.get('/test', (req, res) => {
@@ -68,17 +249,46 @@ app.get('/test', (req, res) => {
 
 // Rota de Login
 app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ message: 'E-mail e senha são obrigatórios.' });
+  const { email, password } = req.body || {};
+  if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+    return sendError(res, 400, 'MISSING_CREDENTIALS', 'E-mail e senha são obrigatórios.');
+  }
+
+  const now = Date.now();
+  const ip = req.ip || 'unknown';
+  const accountKey = `acct:${ip}|${email.trim().toLowerCase()}`;
+  const ipKey = `ip:${ip}`;
+
+  const blockedUntil = getLoginBlock([accountKey, ipKey], now);
+  if (blockedUntil) {
+    const retryAfterSeconds = Math.ceil((blockedUntil - now) / 1000);
+    res.set('Retry-After', String(retryAfterSeconds));
+    return sendError(res, 429, 'TOO_MANY_ATTEMPTS',
+      `Muitas tentativas de login sem sucesso. Tente novamente em ${Math.ceil(retryAfterSeconds / 60)} minuto(s).`,
+      { retryAfterSeconds });
+  }
 
   try {
     const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
-    if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
+    const passwordMatch = await bcrypt.compare(password, user ? user.password_hash : DUMMY_PASSWORD_HASH);
 
-    const passwordMatch = await bcrypt.compare(password, user.password_hash);
-    if (!passwordMatch) return res.status(401).json({ message: 'Credenciais inválidas.' });
+    if (!user || !passwordMatch) {
+      const accountEntry = registerLoginFailure(accountKey, LOGIN_MAX_FAILS_PER_ACCOUNT, now);
+      registerLoginFailure(ipKey, LOGIN_MAX_FAILS_PER_IP, now);
 
-    let ipAddress = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip || 'Desconhecido';
+      const remaining = Math.max(0, LOGIN_MAX_FAILS_PER_ACCOUNT - accountEntry.count);
+      let message = 'Credenciais inválidas.';
+      if (remaining === 0) {
+        message += ` Login bloqueado por ${LOGIN_WINDOW_MS / 60000} minutos.`;
+      } else if (remaining <= 2) {
+        message += ` Restam ${remaining} tentativa(s) antes do bloqueio temporário.`;
+      }
+      return sendError(res, 401, 'INVALID_CREDENTIALS', message, { remainingAttempts: remaining });
+    }
+
+    loginAttempts.delete(accountKey);
+
+    let ipAddress = req.ip || req.socket?.remoteAddress || 'Desconhecido';
     if (ipAddress === '::1' || ipAddress === '::ffff:127.0.0.1') {
       ipAddress = '127.0.0.1 (Localhost)';
     }
@@ -93,20 +303,11 @@ app.post('/api/login', async (req, res) => {
       console.error('Erro ao salvar log de login:', logError);
     }
 
-    const payload = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      theme: user.theme || 'dark',
-      force_password_change: user.force_password_change === 1
-    };
-
-    const token = jwt.sign(payload, jwtSecret, { expiresIn: '12h' });
-    res.status(200).json({ token, user: payload });
+    const token = signUserToken(user);
+    res.status(200).json({ token, user: buildUserPayload(user) });
   } catch (error) {
     console.error('Erro de login:', error);
-    res.status(500).json({ message: 'Erro no servidor.', error: error.message });
+    sendError(res, 500, 'SERVER_ERROR', 'Erro no servidor.', { error: error.message });
   }
 });
 
@@ -116,7 +317,7 @@ let db;
 // Função de inicialização do banco - exportada para uso em testes
 const initializeDatabase = async (dbPath) => {
   db = await open({
-    filename: dbPath || process.env.DATABASE_PATH || './database.sqlite',
+    filename: dbPath || DB_PATH,
     driver: sqlite3.Database
   });
   await db.exec(`
@@ -157,6 +358,11 @@ const initializeDatabase = async (dbPath) => {
   // Atualiza tabela antiga para adicionar coluna de tema, caso não exista
   try {
     await db.exec(`ALTER TABLE users ADD COLUMN theme TEXT DEFAULT 'dark'`);
+  } catch (err) { }
+
+  // Versão da sessão: incrementada ao trocar/redefinir senha para invalidar tokens antigos
+  try {
+    await db.exec(`ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0`);
   } catch (err) { }
 
   await db.exec(`
@@ -211,38 +417,54 @@ const initializeDatabase = async (dbPath) => {
   return db;
 };
 
+// Criação/recuperação do administrador via variáveis de ambiente.
+// - Banco sem nenhum administrador: cria a conta ADMIN_EMAIL com ADMIN_PASSWORD (troca de senha obrigatória no 1º acesso).
+// - ADMIN_RESET_PASSWORD=true: redefine a senha da conta ADMIN_EMAIL (uso pontual para recuperar acesso; remova depois).
+// - Nos demais casos as variáveis são ignoradas, assim a senha escolhida pelo admin não é sobrescrita a cada reinício.
+// Se não houver administrador e as variáveis não estiverem definidas, o servidor não sobe (nenhuma senha padrão é criada).
+async function bootstrapAdmin() {
+  const { count: adminCount } = await db.get("SELECT COUNT(*) as count FROM users WHERE role = 'admin'");
+  const resetRequested = process.env.ADMIN_RESET_PASSWORD === 'true';
+  const hasEnvCredentials = Boolean(ADMIN_EMAIL && ADMIN_PASSWORD);
+
+  if (hasEnvCredentials && (adminCount === 0 || resetRequested)) {
+    if (ADMIN_PASSWORD.length < ADMIN_PASSWORD_MIN_LENGTH) {
+      console.error(`[Segurança] ADMIN_PASSWORD deve ter no mínimo ${ADMIN_PASSWORD_MIN_LENGTH} caracteres. Conta administradora não foi criada/redefinida.`);
+    } else {
+      const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+      const existing = await db.get('SELECT id FROM users WHERE email = ?', [ADMIN_EMAIL]);
+
+      if (existing) {
+        await db.run(
+          "UPDATE users SET password_hash = ?, role = 'admin', force_password_change = 1, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?",
+          [adminHash, existing.id]
+        );
+        console.log(`[Segurança] Senha da conta administradora '${ADMIN_EMAIL}' redefinida via ADMIN_RESET_PASSWORD. Remova essa variável após o acesso.`);
+      } else {
+        await db.run(
+          'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
+          ['Admin do Sistema', ADMIN_EMAIL, adminHash, 'admin', 1]
+        );
+        console.log(`[Segurança] Conta administradora criada a partir das variáveis de ambiente: ${ADMIN_EMAIL}`);
+      }
+    }
+  } else if (resetRequested && !hasEnvCredentials) {
+    console.error('[Segurança] ADMIN_RESET_PASSWORD=true exige ADMIN_EMAIL e ADMIN_PASSWORD definidos.');
+  }
+
+  const { count: finalAdminCount } = await db.get("SELECT COUNT(*) as count FROM users WHERE role = 'admin'");
+  if (finalAdminCount === 0) {
+    console.error('[Segurança] Nenhum administrador cadastrado. Defina ADMIN_EMAIL e ADMIN_PASSWORD (mínimo 12 caracteres) e reinicie. Encerrando.');
+    process.exit(1);
+  }
+}
+
 // Inicialização do servidor em produção (não roda em testes)
 if (process.env.NODE_ENV !== 'test') {
   (async () => {
     try {
       await initializeDatabase();
-
-      // User generation or recovery mechanism via .env
-      if (ADMIN_EMAIL && ADMIN_PASSWORD) {
-        const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-        const existingAdmin = await db.get('SELECT id FROM users WHERE email = ?', [ADMIN_EMAIL]);
-
-        if (existingAdmin) {
-          await db.run('UPDATE users SET password_hash = ?, role = "admin", force_password_change = 0 WHERE email = ?', [adminHash, ADMIN_EMAIL]);
-          console.log(`[Segurança] Acesso Admin recuperado: A conta '${ADMIN_EMAIL}' foi detectada e redefinida com a senha contida no arquivo .env.`);
-        } else {
-          await db.run(
-            'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
-            ['Admin do Sistema', ADMIN_EMAIL, adminHash, 'admin', 0]
-          );
-          console.log(`[Segurança] Usuário Admin gerado a partir do arquivo .env: ${ADMIN_EMAIL}`);
-        }
-      } else {
-        const userCount = await db.get('SELECT COUNT(*) as count FROM users');
-        if (userCount.count === 0) {
-          const defaultPasswordHash = await bcrypt.hash(APP_PASSWORD || 'admin123', 10);
-          await db.run(
-            'INSERT INTO users (name, email, password_hash, role, force_password_change) VALUES (?, ?, ?, ?, ?)',
-            ['Admin', 'admin@mf.com', defaultPasswordHash, 'admin', 0]
-          );
-          console.log('Nenhuma conta .env detectada. Usuário admin gerado por padrão: admin@mf.com / admin123');
-        }
-      }
+      await bootstrapAdmin();
 
       console.log('SQLite database initialized.');
 
@@ -258,6 +480,7 @@ if (process.env.NODE_ENV !== 'test') {
 
     } catch (error) {
       console.error('Failed to initialize SQLite:', error);
+      process.exit(1);
     }
   })();
 }
@@ -563,10 +786,56 @@ const aggregateSummaries = (summaries) => {
 };
 
 
-app.get('/api/cards', authenticateToken, async (req, res) => {
+// --- Validação de parâmetros enviados à API da Hablla ---
+// IDs de quadro entram no caminho da URL da Hablla; aceitar apenas o formato de ID evita que um usuário
+// monte caminhos (ex.: "x/../../outro-endpoint") e acesse outros recursos com o token do servidor.
+const isValidHabllaId = (value) => typeof value === 'string' && HABLLA_ID_REGEX.test(value);
+
+const MAX_CAMPAIGNS_PER_REQUEST = 100;
+const MAX_CAMPAIGN_NAME_LENGTH = 200;
+
+const parseCampaignList = (campaign) => {
+  if (typeof campaign !== 'string') return null;
+  const list = campaign.split(',').map(c => c.trim()).filter(Boolean);
+  if (list.length === 0 || list.length > MAX_CAMPAIGNS_PER_REQUEST) return null;
+  if (list.some(c => c.length > MAX_CAMPAIGN_NAME_LENGTH)) return null;
+  return list;
+};
+
+// Administradores podem escolher quadro e filtros; demais perfis usam sempre o quadro padrão, sem filtros
+// (espelha o que a interface permite para cada perfil).
+const resolveSummaryRequest = (req, params) => {
+  const { campaign, board, boardName, startDate, endDate, source, tags } = params;
+  const campaignList = parseCampaignList(campaign);
+  if (!campaignList) {
+    return { error: { status: 400, code: 'INVALID_CAMPAIGN', message: `Informe de 1 a ${MAX_CAMPAIGNS_PER_REQUEST} campanhas válidas.` } };
+  }
+
+  const isAdmin = req.user.role === 'admin';
+  const boardId = isAdmin && board ? board : DEFAULT_BOARD_ID;
+  if (!isValidHabllaId(boardId)) {
+    return { error: { status: 400, code: 'INVALID_BOARD', message: 'ID de quadro inválido.' } };
+  }
+
+  const filters = {};
+  if (isAdmin) {
+    if (startDate && endDate) {
+      filters.created_at = JSON.stringify({ start_date: startDate, end_date: endDate });
+    }
+    if (source) filters.source = source;
+    if (tags) filters.tags = tags;
+  }
+
+  return { campaignList, boardId, boardName: typeof boardName === 'string' ? boardName.slice(0, 100) : undefined, filters };
+};
+
+app.get('/api/cards', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
     // O quadro 'IA Manutenção' é o padrão, mas permite que seja sobrescrito pela query
-    const boardId = req.query.board || process.env.BOARD_ID_HABLLA;
+    const boardId = req.query.board || DEFAULT_BOARD_ID;
+    if (!isValidHabllaId(boardId)) {
+      return sendError(res, 400, 'INVALID_BOARD', 'ID de quadro inválido.');
+    }
     const { tags, created_at, campaign, source } = req.query;
     const limit = 50;
     const queryParams = {
@@ -585,7 +854,7 @@ app.get('/api/cards', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/api/tags', authenticateToken, async (req, res) => {
+app.get('/api/tags', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
     const data = await fetchHabllaAPI(`/v1/workspaces/${WORKSPACE_ID_HABLLA}/tags`);
     res.status(200).json(data);
@@ -595,7 +864,7 @@ app.get('/api/tags', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/api/sectors', authenticateToken, async (req, res) => {
+app.get('/api/sectors', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
     const data = await fetchHabllaAPI(`/v1/workspaces/${WORKSPACE_ID_HABLLA}/sectors`);
     res.status(200).json(data);
@@ -605,10 +874,13 @@ app.get('/api/sectors', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/api/lists', authenticateToken, async (req, res) => {
+app.get('/api/lists', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
-    const boardId = req.query.board || process.env.BOARD_ID_HABLLA;
-    const data = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/boards/${boardId}/lists`);
+    const boardId = req.query.board || DEFAULT_BOARD_ID;
+    if (!isValidHabllaId(boardId)) {
+      return sendError(res, 400, 'INVALID_BOARD', 'ID de quadro inválido.');
+    }
+    const data = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/boards/${encodeURIComponent(boardId)}/lists`);
     res.status(200).json(data);
   } catch (error) {
     console.error('Error fetching lists:', error);
@@ -617,24 +889,6 @@ app.get('/api/lists', authenticateToken, async (req, res) => {
 });
 
 // --- New Endpoints for Campaign Summary ---
-
-// Get all summaries from database (for Dashboard)
-app.get('/api/all-summaries', authenticateToken, async (req, res) => {
-  try {
-    const summaries = await db.all('SELECT * FROM campaign_summaries');
-    const parsedSummaries = summaries.map(s => ({
-      ...JSON.parse(s.summary_data),
-      id: s.id,
-      campaign_name: s.campaign_name,
-      board_id: s.board_id,
-      lastUpdated: s.last_updated
-    }));
-    res.status(200).json(parsedSummaries);
-  } catch (error) {
-    console.error('Error fetching all summaries:', error);
-    res.status(500).json({ message: 'Error fetching summaries', error: error.message });
-  }
-});
 
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
   try {
@@ -648,22 +902,15 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
 
 // Get Summary (Cache-first) - Supports multiple campaigns (comma separated)
 app.get('/api/campaign-summary', authenticateToken, async (req, res) => {
-  const { campaign, board, boardName, startDate, endDate, source, tags } = req.query;
-
-  if (!campaign) {
-    return res.status(400).json({ message: 'Campaign name is required for summary.' });
+  if (!req.query.campaign) {
+    return sendError(res, 400, 'INVALID_CAMPAIGN', 'Campaign name is required for summary.');
   }
 
-  const boardId = board || process.env.BOARD_ID_HABLLA;
-  const campaignList = campaign.split(',');
-
-  // Filters for the fetch
-  const filters = {};
-  if (startDate && endDate) {
-    filters.created_at = JSON.stringify({ start_date: startDate, end_date: endDate });
+  const resolved = resolveSummaryRequest(req, req.query);
+  if (resolved.error) {
+    return sendError(res, resolved.error.status, resolved.error.code, resolved.error.message);
   }
-  if (source) filters.source = source;
-  if (tags) filters.tags = tags;
+  const { campaignList, boardId, boardName, filters } = resolved;
 
   try {
     const summaries = [];
@@ -682,22 +929,16 @@ app.get('/api/campaign-summary', authenticateToken, async (req, res) => {
 });
 
 // Refresh Summary (Force Update) - Supports multiple campaigns
-app.post('/api/campaign-summary/refresh', authenticateToken, async (req, res) => {
-  const { campaign, board, boardName, startDate, endDate, source, tags } = req.body;
-
-  if (!campaign) {
-    return res.status(400).json({ message: 'Campaign name is required.' });
+app.post('/api/campaign-summary/refresh', authenticateToken, authorizeRoles('admin', 'gestor'), async (req, res) => {
+  if (!req.body?.campaign) {
+    return sendError(res, 400, 'INVALID_CAMPAIGN', 'Campaign name is required.');
   }
 
-  const boardId = board || process.env.BOARD_ID_HABLLA;
-  const campaignList = campaign.split(',');
-
-  const filters = {};
-  if (startDate && endDate) {
-    filters.created_at = JSON.stringify({ start_date: startDate, end_date: endDate });
+  const resolved = resolveSummaryRequest(req, req.body);
+  if (resolved.error) {
+    return sendError(res, resolved.error.status, resolved.error.code, resolved.error.message);
   }
-  if (source) filters.source = source;
-  if (tags) filters.tags = tags;
+  const { campaignList, boardId, boardName, filters } = resolved;
 
   try {
     const summaries = [];
@@ -838,6 +1079,12 @@ app.get('/api/login-logs', authenticateToken, authorizeAdmin, async (req, res) =
 app.post('/api/users', authenticateToken, authorizeAdmin, async (req, res) => {
   const { name, email, password, role = 'user' } = req.body;
   if (!name || !email || !password) return res.status(400).json({ message: 'Todos os campos são obrigatórios' });
+  if (!VALID_ROLES.includes(role)) {
+    return sendError(res, 400, 'INVALID_ROLE', `Perfil inválido. Valores aceitos: ${VALID_ROLES.join(', ')}.`);
+  }
+  if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
+    return sendError(res, 400, 'WEAK_PASSWORD', `A senha deve ter no mínimo ${PASSWORD_MIN_LENGTH} caracteres.`);
+  }
 
   try {
     const existingUser = await db.get('SELECT id FROM users WHERE email = ?', [email]);
@@ -859,10 +1106,17 @@ app.post('/api/users', authenticateToken, authorizeAdmin, async (req, res) => {
 app.put('/api/users/:id/reset-password', authenticateToken, authorizeAdmin, async (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ message: 'Preencha a nova senha.' });
+  if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
+    return sendError(res, 400, 'WEAK_PASSWORD', `A senha deve ter no mínimo ${PASSWORD_MIN_LENGTH} caracteres.`);
+  }
 
   try {
     const hash = await bcrypt.hash(password, 10);
-    await db.run('UPDATE users SET password_hash = ?, force_password_change = 1 WHERE id = ?', [hash, req.params.id]);
+    // Incrementar token_version encerra as sessões abertas do usuário
+    await db.run(
+      'UPDATE users SET password_hash = ?, force_password_change = 1, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?',
+      [hash, req.params.id]
+    );
     res.status(200).json({ message: 'Senha atualizada. O usuário será forçado a trocá-la no próximo acesso.' });
   } catch (error) {
     res.status(500).json({ message: 'Erro ao resetar a senha', error: error.message });
@@ -882,10 +1136,6 @@ app.delete('/api/users/:id', authenticateToken, authorizeAdmin, async (req, res)
   }
 });
 
-// Usuário escolhe a própria senha nova (forçado ou não)
-// (Aqui viria o restante do arquivo do usuário...)
-// Essa linha serve apenas para referência do chunk caso haja mais conteúdo no final do arquivo orig.
-
 // --- Database Management Endpoints ---
 
 const getLocalTimestamp = () => {
@@ -899,50 +1149,153 @@ const getLocalTimestamp = () => {
   return `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
 };
 
+// Nomes de backup aceitos: apenas letras, números, ponto, hífen e sublinhado, com extensão de banco SQLite.
+// Impede caminhos como "../index.js" (o Express decodifica %2F nos parâmetros da URL).
+const BACKUP_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.(sqlite|sqlite3|db)$/;
+
+const resolveBackupPath = (filename) => {
+  if (typeof filename !== 'string' || !BACKUP_NAME_REGEX.test(filename) || filename.includes('..')) return null;
+  const resolved = path.resolve(backupsDir, filename);
+  if (path.dirname(resolved) !== backupsDir) return null;
+  return resolved;
+};
+
+const SQLITE_HEADER = Buffer.from('SQLite format 3\0', 'binary');
+const REQUIRED_TABLES = ['users', 'campaign_summaries'];
+
+// Valida se o arquivo é realmente um banco SQLite íntegro e compatível com o sistema,
+// e não apenas um arquivo com a extensão esperada.
+const validateDatabaseFile = async (filePath) => {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(SQLITE_HEADER.length);
+    const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+    if (bytesRead < header.length || !header.equals(SQLITE_HEADER)) {
+      return { ok: false, reason: 'O arquivo enviado não é um banco de dados SQLite válido.' };
+    }
+  } catch (err) {
+    return { ok: false, reason: 'Não foi possível ler o arquivo enviado.' };
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+
+  let candidate;
+  try {
+    candidate = await open({ filename: filePath, driver: sqlite3.Database, mode: sqlite3.OPEN_READONLY });
+
+    const integrity = await candidate.get('PRAGMA quick_check');
+    if (!integrity || Object.values(integrity)[0] !== 'ok') {
+      return { ok: false, reason: 'O banco de dados enviado está corrompido.' };
+    }
+
+    const tables = (await candidate.all("SELECT name FROM sqlite_master WHERE type = 'table'")).map(t => t.name);
+    const missing = REQUIRED_TABLES.filter(t => !tables.includes(t));
+    if (missing.length > 0) {
+      return { ok: false, reason: `O banco de dados não pertence a esta aplicação (tabelas ausentes: ${missing.join(', ')}).` };
+    }
+
+    // A aplicação não usa triggers; um banco com triggers pode executar SQL inesperado nas gravações.
+    const { count: triggerCount } = await candidate.get("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'trigger'");
+    if (triggerCount > 0) {
+      return { ok: false, reason: 'O banco de dados contém triggers, que não são permitidos.' };
+    }
+
+    const userColumns = (await candidate.all('PRAGMA table_info(users)')).map(c => c.name);
+    if (!['email', 'password_hash', 'role'].every(c => userColumns.includes(c))) {
+      return { ok: false, reason: 'A tabela de usuários do banco enviado é incompatível.' };
+    }
+
+    const { count: adminCount } = await candidate.get("SELECT COUNT(*) as count FROM users WHERE role = 'admin'");
+    if (adminCount === 0) {
+      return { ok: false, reason: 'O banco de dados não possui nenhum administrador; restaurá-lo bloquearia o acesso ao sistema.' };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: 'O arquivo enviado não é um banco de dados SQLite válido.' };
+  } finally {
+    if (candidate) await candidate.close().catch(() => { });
+  }
+};
+
+// Substitui o banco atual por outro arquivo já validado.
+// Usa cópia (e não rename) para funcionar mesmo entre volumes diferentes, guarda o banco atual em backups
+// e, se algo falhar, volta ao banco anterior.
+const swapDatabase = async (sourcePath) => {
+  const safetyBackupPath = path.join(backupsDir, `database_${getLocalTimestamp()}.sqlite`);
+  const hadCurrentDb = fs.existsSync(DB_PATH);
+
+  if (db) await db.close();
+
+  try {
+    if (hadCurrentDb) fs.copyFileSync(DB_PATH, safetyBackupPath);
+    fs.copyFileSync(sourcePath, DB_PATH);
+    await initializeDatabase(DB_PATH);
+  } catch (error) {
+    console.error('Erro ao substituir o banco de dados, restaurando o anterior:', error);
+    try {
+      if (hadCurrentDb && fs.existsSync(safetyBackupPath)) fs.copyFileSync(safetyBackupPath, DB_PATH);
+      await initializeDatabase(DB_PATH);
+    } catch (restoreError) {
+      console.error('Falha ao restaurar o banco anterior:', restoreError);
+    }
+    throw error;
+  }
+};
+
+const removeTempFile = (filePath) => {
+  if (filePath) fs.promises.unlink(filePath).catch(() => { });
+};
+
 app.get('/api/database/export', authenticateToken, authorizeAdmin, (req, res) => {
-  const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite');
-  if (fs.existsSync(dbPath)) {
+  if (fs.existsSync(DB_PATH)) {
     const nowStr = getLocalTimestamp();
-    res.download(dbPath, `database_reportiaforce_${nowStr}.sqlite`);
+    res.download(DB_PATH, `database_reportiaforce_${nowStr}.sqlite`);
   } else {
-    res.status(404).json({ message: 'Arquivo do banco de dados não encontrado.' });
+    sendError(res, 404, 'DB_NOT_FOUND', 'Arquivo do banco de dados não encontrado.');
   }
 });
 
-app.post('/api/database/import', authenticateToken, authorizeAdmin, upload.single('database'), async (req, res) => {
+// Executa o upload do multer devolvendo erros de tamanho/extensão em formato padronizado
+const handleDatabaseUpload = (req, res, next) => {
+  upload.single('database')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return sendError(res, 413, 'FILE_TOO_LARGE', `O arquivo excede o limite de ${MAX_DB_UPLOAD_MB} MB.`);
+    }
+    if (err.code === 'INVALID_FILE_TYPE') {
+      return sendError(res, 400, 'INVALID_FILE_TYPE', err.message);
+    }
+    return sendError(res, 400, 'UPLOAD_ERROR', 'Falha no envio do arquivo.', { error: err.message });
+  });
+};
+
+app.post('/api/database/import', authenticateToken, authorizeAdmin, handleDatabaseUpload, async (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
+    return sendError(res, 400, 'NO_FILE', 'Nenhum arquivo enviado.');
   }
 
+  if (dbSwapInProgress) {
+    removeTempFile(req.file.path);
+    return sendError(res, 409, 'DB_SWAP_IN_PROGRESS', 'Já existe uma importação/restauração em andamento.');
+  }
+
+  dbSwapInProgress = true;
   try {
-    const currentDbPath = process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite');
-    
-    // Desconecta o banco atual
-    if (db) {
-      await db.close();
+    const validation = await validateDatabaseFile(req.file.path);
+    if (!validation.ok) {
+      return sendError(res, 400, 'INVALID_DATABASE', validation.reason);
     }
 
-    if (fs.existsSync(currentDbPath)) {
-      // Renomeia o banco atual para a pasta de backups com a data local
-      const nowStr = getLocalTimestamp();
-      const backupPath = path.join(backupsDir, `database_${nowStr}.sqlite`);
-      fs.renameSync(currentDbPath, backupPath);
-    }
-
-    // Move o arquivo recebido para o path oficial
-    fs.renameSync(req.file.path, currentDbPath);
-
-    // Reconecta ao banco
-    await initializeDatabase(currentDbPath);
-
+    await swapDatabase(req.file.path);
     res.status(200).json({ message: 'Banco de dados importado com sucesso.' });
   } catch (error) {
     console.error('Erro ao importar banco de dados:', error);
-    // Tenta reabrir o banco original caso de erro
-    try {
-        await initializeDatabase();
-    } catch(e) {}
-    res.status(500).json({ message: 'Erro interno ao importar o banco.', error: error.message });
+    sendError(res, 500, 'DB_IMPORT_ERROR', 'Erro interno ao importar o banco.', { error: error.message });
+  } finally {
+    dbSwapInProgress = false;
+    removeTempFile(req.file.path);
   }
 });
 
@@ -952,7 +1305,7 @@ app.get('/api/database/backups', authenticateToken, authorizeAdmin, (req, res) =
     if (!fs.existsSync(backupsDir)) {
       return res.status(200).json([]);
     }
-    const files = fs.readdirSync(backupsDir).filter(f => f.endsWith('.sqlite') || f.endsWith('.db'));
+    const files = fs.readdirSync(backupsDir).filter(f => resolveBackupPath(f) !== null);
     const backups = files.map(file => {
       const stats = fs.statSync(path.join(backupsDir, file));
       return {
@@ -964,57 +1317,48 @@ app.get('/api/database/backups', authenticateToken, authorizeAdmin, (req, res) =
     res.status(200).json(backups);
   } catch (error) {
     console.error('Erro ao listar backups:', error);
-    res.status(500).json({ message: 'Erro interno ao listar backups.', error: error.message });
+    sendError(res, 500, 'BACKUP_LIST_ERROR', 'Erro interno ao listar backups.', { error: error.message });
   }
 });
 
 // Restaurar um backup especifico
 app.post('/api/database/backups/:filename/restore', authenticateToken, authorizeAdmin, async (req, res) => {
-  const { filename } = req.params;
-  const backupFilePath = path.join(backupsDir, filename);
-
+  const backupFilePath = resolveBackupPath(req.params.filename);
+  if (!backupFilePath) {
+    return sendError(res, 400, 'INVALID_BACKUP_NAME', 'Nome de arquivo de backup inválido.');
+  }
   if (!fs.existsSync(backupFilePath)) {
-    return res.status(404).json({ message: 'Arquivo de backup não encontrado.' });
+    return sendError(res, 404, 'BACKUP_NOT_FOUND', 'Arquivo de backup não encontrado.');
+  }
+  if (dbSwapInProgress) {
+    return sendError(res, 409, 'DB_SWAP_IN_PROGRESS', 'Já existe uma importação/restauração em andamento.');
   }
 
+  dbSwapInProgress = true;
   try {
-    const currentDbPath = process.env.DATABASE_PATH || path.join(__dirname, 'database.sqlite');
-    
-    // Desconecta o banco atual
-    if (db) {
-      await db.close();
+    const validation = await validateDatabaseFile(backupFilePath);
+    if (!validation.ok) {
+      return sendError(res, 400, 'INVALID_DATABASE', validation.reason);
     }
 
-    if (fs.existsSync(currentDbPath)) {
-      // Renomeia o banco atual para a pasta de backups com a data local
-      const nowStr = getLocalTimestamp();
-      const safeBackupPath = path.join(backupsDir, `database_${nowStr}.sqlite`);
-      fs.renameSync(currentDbPath, safeBackupPath);
-    }
-
-    // Copia o backup desejado para ser o banco atual
-    fs.copyFileSync(backupFilePath, currentDbPath);
-
-    // Reconecta ao banco
-    await initializeDatabase(currentDbPath);
-
+    await swapDatabase(backupFilePath);
     res.status(200).json({ message: 'Backup restaurado com sucesso.' });
   } catch (error) {
     console.error('Erro ao restaurar backup:', error);
-    try {
-        await initializeDatabase();
-    } catch(e) {}
-    res.status(500).json({ message: 'Erro interno ao restaurar o backup.', error: error.message });
+    sendError(res, 500, 'DB_RESTORE_ERROR', 'Erro interno ao restaurar o backup.', { error: error.message });
+  } finally {
+    dbSwapInProgress = false;
   }
 });
 
 // Excluir um backup especifico
 app.delete('/api/database/backups/:filename', authenticateToken, authorizeAdmin, (req, res) => {
-  const { filename } = req.params;
-  const backupFilePath = path.join(backupsDir, filename);
-
+  const backupFilePath = resolveBackupPath(req.params.filename);
+  if (!backupFilePath) {
+    return sendError(res, 400, 'INVALID_BACKUP_NAME', 'Nome de arquivo de backup inválido.');
+  }
   if (!fs.existsSync(backupFilePath)) {
-    return res.status(404).json({ message: 'Arquivo de backup não encontrado.' });
+    return sendError(res, 404, 'BACKUP_NOT_FOUND', 'Arquivo de backup não encontrado.');
   }
 
   try {
@@ -1022,9 +1366,70 @@ app.delete('/api/database/backups/:filename', authenticateToken, authorizeAdmin,
     res.status(200).json({ message: 'Backup excluído com sucesso.' });
   } catch (error) {
     console.error('Erro ao excluir backup:', error);
-    res.status(500).json({ message: 'Erro interno ao excluir o backup.', error: error.message });
+    sendError(res, 500, 'BACKUP_DELETE_ERROR', 'Erro interno ao excluir o backup.', { error: error.message });
   }
 });
+
+// --- Integração: envio do resumo de campanha para webhook externo (ex.: n8n → Telegram) ---
+// Habilitada apenas quando WEBHOOK_REPORT_URL estiver definida. A chamada é feita pelo servidor,
+// então a URL e o token opcional (WEBHOOK_REPORT_TOKEN) nunca chegam ao navegador.
+const WEBHOOK_REPORT_URL = (() => {
+  const raw = (process.env.WEBHOOK_REPORT_URL || '').trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('protocolo inválido');
+    return url.toString();
+  } catch (err) {
+    console.error('[Webhook] WEBHOOK_REPORT_URL inválida; integração desabilitada.');
+    return null;
+  }
+})();
+const WEBHOOK_TIMEOUT_MS = 10000;
+const WEBHOOK_FIELDS = [
+  'board', 'campanha', 'dt_envio', 'total_clientes', 'total_tel', 'nao_receberam_mgs', 'total_lida',
+  'total_entregue', 'total_respostas', 'venda_ia', 'venda_manual', 'mgs_enviada'
+];
+
+app.get('/api/integrations/webhook', authenticateToken, authorizeAdmin, (req, res) => {
+  res.status(200).json({ enabled: Boolean(WEBHOOK_REPORT_URL) });
+});
+
+app.post('/api/integrations/webhook/report', authenticateToken, authorizeAdmin, async (req, res) => {
+  if (!WEBHOOK_REPORT_URL) {
+    return sendError(res, 503, 'WEBHOOK_DISABLED', 'O envio por webhook não está habilitado neste servidor.');
+  }
+
+  // Repassa apenas os campos conhecidos do resumo, com tamanho limitado
+  const payload = { origem: 'report_ia_force' };
+  for (const field of WEBHOOK_FIELDS) {
+    const value = req.body?.[field];
+    if (value === undefined || value === null) continue;
+    payload[field] = typeof value === 'string' ? value.slice(0, 5000) : (typeof value === 'number' ? value : String(value).slice(0, 5000));
+  }
+
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (process.env.WEBHOOK_REPORT_TOKEN) headers['Authorization'] = `Bearer ${process.env.WEBHOOK_REPORT_TOKEN}`;
+
+    const response = await fetch(WEBHOOK_REPORT_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS)
+    });
+
+    if (!response.ok) {
+      console.error(`[Webhook] Resposta ${response.status} ao enviar resumo.`);
+      return sendError(res, 502, 'WEBHOOK_FAILED', `O webhook respondeu com erro (${response.status}).`);
+    }
+    res.status(200).json({ message: 'Resumo enviado com sucesso.' });
+  } catch (error) {
+    console.error('[Webhook] Falha ao enviar resumo:', error.message);
+    sendError(res, 502, 'WEBHOOK_UNREACHABLE', 'Não foi possível contatar o webhook configurado.');
+  }
+});
+
 
 // --- Configurações / Cronjob Endpoints ---
 
@@ -1034,7 +1439,7 @@ const pushLog = async (title, message, type) => {
   const id = Math.random().toString(36).substring(7);
   try {
     await db.run(
-      'INSERT INTO sys_logs (id, title, message, type, timestamp, is_read) VALUES (?, ?, ?, ?, datetime("now", "localtime"), 0)',
+      "INSERT INTO sys_logs (id, title, message, type, timestamp, is_read) VALUES (?, ?, ?, ?, datetime('now', 'localtime'), 0)",
       [id, title, message, type]
     );
   } catch (err) {
@@ -1131,7 +1536,7 @@ app.post('/api/settings/cronjob', authenticateToken, authorizeAdmin, async (req,
 });
 
 // Admin system logs/notifications
-app.get('/api/sys-logs', authenticateToken, async (req, res) => {
+app.get('/api/sys-logs', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
     const logs = await db.all('SELECT * FROM sys_logs WHERE is_read = 0 ORDER BY timestamp DESC');
     res.status(200).json(logs);
@@ -1140,10 +1545,10 @@ app.get('/api/sys-logs', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/sys-logs/mark-read', authenticateToken, async (req, res) => {
+app.post('/api/sys-logs/mark-read', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
     const { ids } = req.body;
-    if (ids && ids.length > 0) {
+    if (Array.isArray(ids) && ids.length > 0 && ids.length <= 500) {
       const placeholders = ids.map(() => '?').join(',');
       await db.run(`UPDATE sys_logs SET is_read = 1 WHERE id IN (${placeholders})`, ids);
     }
@@ -1152,38 +1557,43 @@ app.post('/api/sys-logs/mark-read', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false });
   }
 });
-app.post('/api/change-password', authenticateToken, async (req, res) => {
+// Usuário escolhe a própria senha nova (forçado ou não).
+// É a única rota de negócio liberada enquanto a troca de senha obrigatória estiver pendente.
+app.post('/api/change-password', authenticate({ allowPendingPasswordChange: true }), async (req, res) => {
   const { currentPassword, newPassword } = req.body;
-  if (!currentPassword || !newPassword) return res.status(400).json({ message: 'Ambas as senhas são exigidas.' });
+  if (!currentPassword || !newPassword) return sendError(res, 400, 'MISSING_PASSWORD', 'Ambas as senhas são exigidas.');
+  if (typeof newPassword !== 'string' || newPassword.length < PASSWORD_MIN_LENGTH) {
+    return sendError(res, 400, 'WEAK_PASSWORD', `A nova senha deve ter no mínimo ${PASSWORD_MIN_LENGTH} caracteres.`);
+  }
+  if (newPassword === currentPassword) {
+    return sendError(res, 400, 'PASSWORD_REUSED', 'A nova senha deve ser diferente da senha atual.');
+  }
 
   try {
     const user = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
-    if (!user) return res.status(404).json({ message: 'Usuário não encontrado' });
+    if (!user) return sendError(res, 404, 'USER_NOT_FOUND', 'Usuário não encontrado');
 
     const match = await bcrypt.compare(currentPassword, user.password_hash);
-    if (!match) return res.status(401).json({ message: 'Senha atual não confere.' });
+    if (!match) return sendError(res, 400, 'WRONG_CURRENT_PASSWORD', 'Senha atual não confere.');
 
     const hash = await bcrypt.hash(newPassword, 10);
-    await db.run('UPDATE users SET password_hash = ?, force_password_change = 0 WHERE id = ?', [hash, req.user.id]);
+    // Incrementar token_version encerra as outras sessões abertas com a senha antiga
+    await db.run(
+      'UPDATE users SET password_hash = ?, force_password_change = 0, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?',
+      [hash, req.user.id]
+    );
 
-    const payload = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      force_password_change: false
-    };
+    const updatedUser = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    const token = signUserToken(updatedUser);
 
-    const token = jwt.sign(payload, jwtSecret, { expiresIn: '12h' });
-
-    res.status(200).json({ message: 'Senha modificada com sucesso!', token, user: payload });
+    res.status(200).json({ message: 'Senha modificada com sucesso!', token, user: buildUserPayload(updatedUser) });
   } catch (error) {
     res.status(500).json({ message: 'Erro interno.', error: error.message });
   }
 });
 
-// Atualiza o prefixo do tema do usuário
-app.put('/api/users/theme', authenticateToken, async (req, res) => {
+// Atualiza o prefixo do tema do usuário (preferência visual, liberada mesmo com troca de senha pendente)
+app.put('/api/users/theme', authenticate({ allowPendingPasswordChange: true }), async (req, res) => {
   const { theme } = req.body;
   if (!['light', 'dark', 'system'].includes(theme)) return res.status(400).json({ message: 'Tema inválido.' });
 
@@ -1197,4 +1607,4 @@ app.put('/api/users/theme', authenticateToken, async (req, res) => {
 });
 
 // --- Exportações para testes ---
-export { app, initializeDatabase, calculateSummary, aggregateSummaries };
+export { app, initializeDatabase, calculateSummary, aggregateSummaries, resetLoginRateLimiter, validateDatabaseFile, resolveBackupPath };

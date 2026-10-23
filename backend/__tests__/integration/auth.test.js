@@ -40,7 +40,7 @@ describe('POST /api/login', () => {
 
     // Verificar no banco de dados se o log foi criado
     const { db } = await import('../helpers/setup.js');
-    const logs = await db.all('SELECT * FROM login_logs WHERE user_email = ? ORDER BY login_time DESC', ['admin@teste.com']);
+    const logs = await db.all('SELECT * FROM login_logs WHERE user_email = ? ORDER BY id DESC', ['admin@teste.com']);
     
     expect(logs.length).toBeGreaterThan(0);
     expect(logs[0].user_name).toBe('Admin Teste');
@@ -110,40 +110,30 @@ describe('Middleware authenticateToken', () => {
     expect(res.body.message).toContain('Token');
   });
 
-  test('retorna 403 com token inválido', async () => {
+  test('retorna 401 com token inválido', async () => {
     const res = await request(app)
       .get('/api/tags')
       .set('Authorization', 'Bearer token_invalido_123');
 
-    expect(res.status).toBe(403);
-    expect(res.body.message).toContain('inválido');
+    expect(res.status).toBe(401);
+    expect(res.body.message).toContain('inválida');
+    expect(res.body.code).toBe('TOKEN_INVALID');
   });
 
-  test('retorna 403 com token expirado', async () => {
+  test('retorna 401 com token expirado', async () => {
     const expiredToken = generateExpiredToken();
     const res = await request(app)
       .get('/api/campaigns')
       .set('Authorization', `Bearer ${expiredToken}`);
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('TOKEN_EXPIRED');
   });
 });
 
 describe('POST /api/change-password', () => {
-  test('troca senha com sucesso e retorna novo token', async () => {
-    const token = generateToken('user', { id: 2 });
-
-    const res = await request(app)
-      .post('/api/change-password')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ currentPassword: 'user123', newPassword: 'novaSenha456' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.message).toContain('Senha modificada');
-    expect(res.body.token).toBeDefined();
-  });
-
-  test('retorna 401 com senha atual incorreta', async () => {
+  // Os testes de erro vêm antes do de sucesso: a troca de senha invalida os tokens antigos do usuário
+  test('retorna 400 com senha atual incorreta', async () => {
     const token = generateToken('user', { id: 2 });
 
     const res = await request(app)
@@ -151,7 +141,8 @@ describe('POST /api/change-password', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ currentPassword: 'senha_errada', newPassword: 'novaSenha456' });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('WRONG_CURRENT_PASSWORD');
     expect(res.body.message).toContain('não confere');
   });
 
@@ -165,5 +156,48 @@ describe('POST /api/change-password', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.message).toContain('exigidas');
+  });
+
+  test('retorna 400 com nova senha curta ou igual à atual', async () => {
+    const token = generateToken('user', { id: 2 });
+
+    const short = await request(app)
+      .post('/api/change-password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'user123', newPassword: '123' });
+    expect(short.status).toBe(400);
+    expect(short.body.code).toBe('WEAK_PASSWORD');
+
+    const reused = await request(app)
+      .post('/api/change-password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'user123', newPassword: 'user123' });
+    expect(reused.status).toBe(400);
+    expect(reused.body.code).toBe('PASSWORD_REUSED');
+  });
+
+  test('troca senha com sucesso, retorna novo token e invalida o antigo', async () => {
+    const token = generateToken('user', { id: 2 });
+
+    const res = await request(app)
+      .post('/api/change-password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ currentPassword: 'user123', newPassword: 'novaSenha456' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toContain('Senha modificada');
+    expect(res.body.token).toBeDefined();
+    expect(res.body.user.theme).toBeDefined();
+
+    const oldTokenRes = await request(app)
+      .get('/api/campaigns')
+      .set('Authorization', `Bearer ${token}`);
+    expect(oldTokenRes.status).toBe(401);
+    expect(oldTokenRes.body.code).toBe('SESSION_REVOKED');
+
+    const newTokenRes = await request(app)
+      .get('/api/campaigns')
+      .set('Authorization', `Bearer ${res.body.token}`);
+    expect(newTokenRes.status).toBe(200);
   });
 });
