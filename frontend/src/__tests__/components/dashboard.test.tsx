@@ -190,7 +190,7 @@ describe('Dashboard Component', () => {
     render(<Dashboard {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Campanhas')).toBeInTheDocument();
+      expect(screen.getByText(/^Campanhas - Total \d+$/)).toBeInTheDocument();
       expect(screen.getByText('Campanha')).toBeInTheDocument();
       expect(screen.getByText('Disparo/Mes')).toBeInTheDocument();
     });
