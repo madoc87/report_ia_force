@@ -1,6 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { getBaseUrl } from '@/lib/config';
-import { handleAuthErrors } from '@/lib/api';
+import { handleAuthErrors, logError, toApiError, toUiError, UiError } from '@/lib/api';
+import {
+  buildShotDayOptions, computeConversions, formatMonthKey, getCommercialMonthKey, getFiscalMonthKey,
+  getPreviousMonthKey, normalizeShotDate, parseCurrency, shotDateSortValue
+} from '@/lib/dashboard-utils';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -16,6 +20,7 @@ import {
 import { CampaignOption } from '@/components/ui/multi-select-campaign';
 import { Notification } from '@/App';
 import { Header } from '@/components/header';
+import { ErrorAlert } from '@/components/error-alert';
 import { ArrowDownRight, Bot, PieChart as PieChartIcon } from 'lucide-react';
 import { MultiSelectCampaign } from '@/components/ui/multi-select-campaign';
 
@@ -48,47 +53,20 @@ interface DashboardProps {
   campaignsData: CampaignOption[];
 }
 
-const monthOrder: Record<string, number> = {
-  'Jan': 1, 'Fev': 2, 'Mar': 3, 'Abr': 4, 'Mai': 5, 'Jun': 6,
-  'Jul': 7, 'Ago': 8, 'Set': 9, 'Out': 10, 'Nov': 11, 'Dez': 12
-};
+type FilterMode = 'month' | 'grouped' | 'month_shots' | 'individual' | 'day';
 
-const getFiscalMonth = (dateStr: string) => {
-  if (!dateStr || dateStr === 'N/A' || dateStr === 'campanha não enviada') return 'Unknown';
-  const parts = dateStr.split('/');
-  if (parts.length >= 2) {
-    const monthIndex = parseInt(parts[1], 10) - 1;
-    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-    return months[monthIndex] || 'Unknown';
-  }
-  return 'Unknown';
-};
-
-const getCommercialMonth = (dateStr: string) => {
-  if (!dateStr || dateStr === 'N/A' || dateStr === 'campanha não enviada') return 'Unknown';
-  const parts = dateStr.split('/');
-  if (parts.length >= 2) {
-    const day = parseInt(parts[0], 10);
-    let monthIndex = parseInt(parts[1], 10) - 1;
-    // Commercial month starts on the 21st, so day >= 21 belongs to next month
-    if (day >= 21) {
-      monthIndex = (monthIndex + 1) % 12;
-    }
-    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-    return months[monthIndex] || 'Unknown';
-  }
-  return 'Unknown';
-};
+const REVENUE_PER_SALE = 149.9;
 
 export function Dashboard({ onMenuClick, notifications, setNotifications, user, onLogout, campaignsData }: DashboardProps) {
-  const [data, setData] = useState<any[]>([]);
-  const [filteredData, setFilteredData] = useState<any[]>([]);
-  const [filterMode, setFilterMode] = useState<'month' | 'grouped' | 'month_shots' | 'individual'>('month_shots');
+  const [rawData, setRawData] = useState<CampaignData[]>([]);
+  const [filterMode, setFilterMode] = useState<FilterMode>('month_shots');
   const [monthType, setMonthType] = useState<'fiscal' | 'comercial'>('fiscal');
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
   const [selectedSubMonth, setSelectedSubMonth] = useState<string>('all');
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
+  const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<UiError | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
@@ -116,81 +94,12 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
 
         await handleAuthErrors(response, onLogout);
 
-        if (!response.ok) throw new Error('Failed to fetch dashboard data');
-        const json = await response.json();
-
-        const processed = json.map((item: CampaignData) => {
-          // Buscar metadados da campanha
-          const campaignMeta = campaignsData.find(c => c.name === item.campaign_name);
-
-          // Desconsiderar se for "Não enviado"
-          if (campaignMeta?.month === "Não enviado") return null;
-
-          const monthVal = campaignMeta?.month || "Unknown";
-
-          // Extrair mês e disparo para ordenação
-          let monthName = "Unknown";
-          let shotNumber = 0;
-          if (monthVal.includes('-')) {
-            const parts = monthVal.split('-');
-            shotNumber = parseInt(parts[0].replace('D', ''));
-            monthName = parts[1];
-          }
-
-          const dateOnly = campaignMeta?.date_only || '';
-          const fiscalMonth = getFiscalMonth(dateOnly);
-          const commercialMonth = getCommercialMonth(dateOnly);
-
-          // Nome agrupado (removendo .01, .02, etc)
-          const groupedName = item.campaign_name.replace(/\.\d+$/, '').trim();
-
-          let parsedTotalCost = 0;
-          if (typeof item.total_cost === 'number') {
-            parsedTotalCost = item.total_cost;
-          } else if (typeof item.total_cost === 'string') {
-            const c = item.total_cost.replace('R$', '').trim();
-            if (c.includes(',') && c.includes('.')) {
-              parsedTotalCost = parseFloat(c.replace(/\./g, '').replace(',', '.'));
-            } else if (c.includes(',')) {
-              parsedTotalCost = parseFloat(c.replace(',', '.'));
-            } else {
-              parsedTotalCost = parseFloat(c);
-            }
-          }
-
-          return {
-            id: item.id,
-            name: item.campaign_name,
-            groupedName,
-            month: monthVal,
-            monthName,
-            fiscalMonth,
-            commercialMonth,
-            shotNumber,
-            salesIA: item.sales_ia || 0,
-            salesManual: item.sales_manual || 0,
-            totalSales: (item.sales_ia || 0) + (item.sales_manual || 0),
-            revenue: ((item.sales_ia || 0) + (item.sales_manual || 0)) * 149.9,
-            clients: item.total_clients || 0,
-            responses: item.total_hablla_responses || 0,
-            conversionSalesClients: item.conversion_sales_clients || "0",
-            conversionSalesResponses: item.conversion_sales_responses || "0",
-            totalCost: parsedTotalCost || 0,
-            date: item.date_range
-          };
-        }).filter(Boolean);
-
-        // Ordenar dados por mês e depois por disparo
-        processed.sort((a: any, b: any) => {
-          const monthDiff = (monthOrder[a.monthName] || 0) - (monthOrder[b.monthName] || 0);
-          if (monthDiff !== 0) return monthDiff;
-          return a.shotNumber - b.shotNumber;
-        });
-
-        setData(processed);
-        setFilteredData(processed);
+        if (!response.ok) throw await toApiError(response, 'Não foi possível carregar os dados do Dashboard.');
+        setRawData(await response.json());
+        setLoadError(null);
       } catch (error) {
-        console.error('Error fetching dashboard data:', error);
+        logError('Carregamento do Dashboard', error);
+        setLoadError({ ...toUiError(error), title: 'Erro ao carregar o Dashboard' });
       } finally {
         setIsLoading(false);
       }
@@ -199,22 +108,79 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     fetchDashboardData();
   }, []);
 
-  useEffect(() => {
+  // Processa os dados sempre que os resumos OU a lista de campanhas mudarem
+  // (a lista de campanhas pode chegar depois do primeiro carregamento)
+  const data = useMemo(() => {
+    const processed = rawData.map((item) => {
+      const campaignMeta = campaignsData.find(c => c.name === item.campaign_name);
+      const shotDate = normalizeShotDate(campaignMeta?.date_only);
+
+      // Campanha sem Data de Disparo cadastrada = campanha não enviada: fica fora do Dashboard
+      if (!shotDate) return null;
+
+      const monthVal = campaignMeta?.month || "Unknown";
+
+      // Número do disparo (D01, D02...) para ordenação
+      let shotNumber = 0;
+      if (monthVal.includes('-')) {
+        shotNumber = parseInt(monthVal.split('-')[0].replace('D', ''), 10) || 0;
+      }
+
+      // Nome agrupado (removendo .01, .02, etc)
+      const groupedName = item.campaign_name.replace(/\.\d+$/, '').trim();
+
+      const salesIA = item.sales_ia || 0;
+      const salesManual = item.sales_manual || 0;
+      const totalSales = salesIA + salesManual;
+      const clients = item.total_clients || 0;
+      const responses = item.total_hablla_responses || 0;
+
+      return {
+        id: item.id,
+        name: item.campaign_name,
+        groupedName,
+        month: monthVal,
+        shotDate,
+        shotDateSort: shotDateSortValue(shotDate),
+        fiscalMonth: getFiscalMonthKey(shotDate),
+        commercialMonth: getCommercialMonthKey(shotDate),
+        shotNumber,
+        salesIA,
+        salesManual,
+        totalSales,
+        revenue: totalSales * REVENUE_PER_SALE,
+        clients,
+        responses,
+        ...computeConversions(totalSales, clients, responses),
+        totalCost: parseCurrency(item.total_cost),
+        date: item.date_range
+      };
+    }).filter(Boolean) as any[];
+
+    processed.sort((a, b) => a.shotDateSort - b.shotDateSort || a.shotNumber - b.shotNumber);
+    return processed;
+  }, [rawData, campaignsData]);
+
+  const activeMonthKey = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
+
+  const filteredData = useMemo(() => {
     let result = [...data];
 
     if (filterMode === 'month') {
       if (selectedMonth !== 'all') {
-        const key = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
-        result = result.filter(d => d[key] === selectedMonth);
+        result = result.filter(d => d[activeMonthKey] === selectedMonth);
       }
     } else if (filterMode === 'month_shots') {
       if (selectedSubMonth !== 'all') {
-        const key = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
-        result = result.filter(d => d[key] === selectedSubMonth);
+        result = result.filter(d => d[activeMonthKey] === selectedSubMonth);
       }
     } else if (filterMode === 'individual') {
       if (selectedCampaigns.length > 0) {
         result = result.filter(d => selectedCampaigns.includes(d.name));
+      }
+    } else if (filterMode === 'day') {
+      if (selectedDays.length > 0) {
+        result = result.filter(d => selectedDays.includes(d.shotDate));
       }
     } else if (filterMode === 'grouped') {
       // Agrupar por groupedName mantendo a ordem da primeira ocorrência
@@ -223,50 +189,37 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
 
       result.forEach(item => {
         if (!groups[item.groupedName]) {
-          groups[item.groupedName] = { ...item, name: item.groupedName, count: 0 };
-          groups[item.groupedName].salesIA = 0;
-          groups[item.groupedName].salesManual = 0;
-          groups[item.groupedName].totalSales = 0;
-          groups[item.groupedName].revenue = 0;
-          groups[item.groupedName].clients = 0;
-          groups[item.groupedName].responses = 0;
-          groups[item.groupedName].totalCost = 0;
+          groups[item.groupedName] = {
+            ...item, name: item.groupedName, count: 0,
+            salesIA: 0, salesManual: 0, totalSales: 0, revenue: 0, clients: 0, responses: 0, totalCost: 0
+          };
           orderedGroups.push(groups[item.groupedName]);
         }
-        groups[item.groupedName].salesIA += item.salesIA;
-        groups[item.groupedName].salesManual += item.salesManual;
-        groups[item.groupedName].totalSales += item.totalSales;
-        groups[item.groupedName].revenue += item.revenue;
-        groups[item.groupedName].clients += item.clients;
-        groups[item.groupedName].responses += item.responses;
-        groups[item.groupedName].totalCost += item.totalCost;
-        groups[item.groupedName].count += 1;
+        const group = groups[item.groupedName];
+        group.salesIA += item.salesIA;
+        group.salesManual += item.salesManual;
+        group.totalSales += item.totalSales;
+        group.revenue += item.revenue;
+        group.clients += item.clients;
+        group.responses += item.responses;
+        group.totalCost += item.totalCost;
+        group.count += 1;
       });
 
-      // Recalcular as conversões para o grupo após agrupar tudo
+      // Recalcula as conversões do grupo com a mesma fórmula das campanhas individuais
       orderedGroups.forEach(group => {
-        group.conversionSalesClients = group.clients > 0
-          ? ((group.totalSales / group.clients) * 100).toFixed(2)
-          : "0";
-        // Conversão IA: Total de Vendas IA / Total de Respostas * 100
-        group.conversionSalesResponses = group.responses > 0
-          ? ((group.salesIA / group.responses) * 100).toFixed(2)
-          : "0";
+        Object.assign(group, computeConversions(group.totalSales, group.clients, group.responses));
       });
 
       result = orderedGroups;
     }
 
-    result.sort((a: any, b: any) => {
-      const activeKey = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
-      const monthDiff = (monthOrder[a[activeKey]] || 0) - (monthOrder[b[activeKey]] || 0);
-      if (monthDiff !== 0) return monthDiff;
-      return a.shotNumber - b.shotNumber;
-    });
+    return result;
+  }, [data, filterMode, activeMonthKey, selectedMonth, selectedSubMonth, selectedCampaigns, selectedDays]);
 
-    setFilteredData(result);
+  useEffect(() => {
     setCurrentPage(1);
-  }, [filterMode, monthType, selectedMonth, selectedSubMonth, selectedCampaigns, data]);
+  }, [filteredData]);
 
   const totals = filteredData.reduce((acc, curr) => ({
     revenue: acc.revenue + curr.revenue,
@@ -276,8 +229,11 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     cost: acc.cost + (curr.totalCost || 0)
   }), { revenue: 0, sales: 0, clients: 0, responses: 0, cost: 0 });
 
-  const activeMonthKey = monthType === 'fiscal' ? 'fiscalMonth' : 'commercialMonth';
-  const availableMonths = [...new Set(data.map(d => d[activeMonthKey]).filter(m => m !== 'Unknown'))].sort((a, b) => monthOrder[a] - monthOrder[b]);
+  // Meses disponíveis (com ano), em ordem cronológica
+  const availableMonths = [...new Set(data.map(d => d[activeMonthKey]).filter(Boolean))].sort() as string[];
+
+  // Dias de disparo disponíveis, a partir do campo "Data de Disparo" das campanhas cadastradas
+  const shotDayOptions = useMemo(() => buildShotDayOptions(campaignsData), [campaignsData]) as unknown as CampaignOption[];
 
   let activeMonth = 'all';
   if (filterMode === 'month') {
@@ -286,22 +242,14 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     activeMonth = selectedSubMonth;
   }
 
-  const calcAverage = (key: string, isStringPercent = false) => {
+  const calcAverage = (key: string) => {
     if (filteredData.length === 0) return 0;
-    const sum = filteredData.reduce((acc, curr) => {
-      let val = 0;
-      if (isStringPercent) {
-        val = parseFloat(curr[key]) || 0;
-      } else {
-        val = curr[key] || 0;
-      }
-      return acc + val;
-    }, 0);
+    const sum = filteredData.reduce((acc, curr) => acc + (Number(curr[key]) || 0), 0);
     return sum / filteredData.length;
   };
 
-  const avgConvVendas = calcAverage('conversionSalesClients', true);
-  const avgConvIA = calcAverage('conversionSalesResponses', true);
+  const avgConvVendas = calcAverage('conversionSalesClients');
+  const avgConvIA = calcAverage('conversionSalesResponses');
   const avgSales = calcAverage('totalSales');
   const avgRevenue = calcAverage('revenue');
   const avgCost = calcAverage('totalCost');
@@ -314,11 +262,11 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
     cost: null
   };
 
+  // Compara com o mês de calendário imediatamente anterior (só quando há dados nele)
   if (activeMonth !== 'all') {
-    const currentIndex = availableMonths.indexOf(activeMonth);
-    if (currentIndex > 0) {
-      const prevMonth = availableMonths[currentIndex - 1];
-      const prevMonthData = data.filter(d => d[activeMonthKey] === prevMonth);
+    const prevMonth = getPreviousMonthKey(activeMonth);
+    const prevMonthData = data.filter(d => d[activeMonthKey] === prevMonth);
+    if (prevMonthData.length > 0) {
       const prevTotals = prevMonthData.reduce((acc, curr) => ({
         revenue: acc.revenue + curr.revenue,
         sales: acc.sales + curr.totalSales,
@@ -367,6 +315,8 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
         onLogout={onLogout}
       />
 
+      {loadError && <ErrorAlert error={loadError} className="mb-6" />}
+
       {/* Filters */}
       <div className="flex flex-col md:flex-row gap-4 mb-8">
         <div className="flex-1">
@@ -377,6 +327,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="month_shots">Por Mês de Disparo</SelectItem>
+              <SelectItem value="day">Por Dia de Disparo</SelectItem>
               <SelectItem value="individual">Campanhas Individuais</SelectItem>
               <SelectItem value="grouped">Campanhas Agrupadas</SelectItem>
               <SelectItem value="month">Por Mês</SelectItem>
@@ -386,7 +337,6 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
 
         {(filterMode === 'month_shots' || filterMode === 'month') && (
           <div className="flex-[0.8]">
-            {/* <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Tipo de Mês</label> */}
             <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Filtro de Período</label>
             <Select value={monthType} onValueChange={(v: any) => setMonthType(v)}>
               <SelectTrigger className="bg-card border-none shadow-sm h-10">
@@ -409,7 +359,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os Meses</SelectItem>
-                {availableMonths.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                {availableMonths.map(m => <SelectItem key={m} value={m}>{formatMonthKey(m)}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -424,7 +374,7 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas</SelectItem>
-                {availableMonths.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                {availableMonths.map(m => <SelectItem key={m} value={m}>{formatMonthKey(m)}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -437,6 +387,21 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
               options={campaignsData}
               selected={selectedCampaigns}
               onChange={setSelectedCampaigns}
+            />
+          </div>
+        )}
+
+        {filterMode === 'day' && (
+          <div className="flex-[3]">
+            <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Dias de Disparo</label>
+            <MultiSelectCampaign
+              options={shotDayOptions}
+              selected={selectedDays}
+              onChange={setSelectedDays}
+              placeholder="Selecione os dias de disparo..."
+              searchPlaceholder="Buscar dia (ex.: 22/10/2026)..."
+              emptyText="Nenhum dia de disparo encontrado."
+              allowCustom={false}
             />
           </div>
         )}
@@ -664,8 +629,8 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-50/10">
-                {paginatedData.map((item, i) => (
-                  <tr key={i} className="hover:bg-zinc-50/5 transition-colors">
+                {paginatedData.map((item) => (
+                  <tr key={item.id ?? item.name} className="hover:bg-zinc-50/5 transition-colors">
                     <td className="px-4 py-4 font-medium">{item.name}</td>
                     <td className="px-4 py-4 text-center text-xs text-muted-foreground">{item.month}</td>
                     <td className="px-4 py-4 text-center">{item.clients}</td>
@@ -750,11 +715,12 @@ function StatsCard({ title, value, trend, icon, color, noTrend }: any) {
   );
 }
 
+const formatPercent = (value: unknown) =>
+  `${(Number(value) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
-    const convVendas = String(data.conversionSalesClients).replace('%', '').trim();
-    const convIA = String(data.conversionSalesResponses).replace('%', '').trim();
 
     return (
       <div
@@ -766,10 +732,10 @@ const CustomTooltip = ({ active, payload, label }: any) => {
           Receita: <span className="font-medium text-white">{data.revenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
         </p>
         <p className="mb-1 text-indigo-400/80">
-          Conversão Vendas: <span className="font-medium text-white">{convVendas}%</span>
+          Conversão Vendas: <span className="font-medium text-white">{formatPercent(data.conversionSalesClients)}</span>
         </p>
         <p className="mb-1 text-indigo-400/80">
-          Conversão IA: <span className="font-medium text-white">{convIA}%</span>
+          Conversão IA: <span className="font-medium text-white">{formatPercent(data.conversionSalesResponses)}</span>
         </p>
         <p className="text-indigo-400/80">
           Custo: <span className="font-medium text-white">{data.totalCost ? data.totalCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'R$ 0,00'}</span>

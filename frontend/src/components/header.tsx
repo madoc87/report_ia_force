@@ -4,9 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Bell, Menu } from 'lucide-react';
 import { Notification } from '@/App';
+import { ErrorDetailsPanel } from '@/components/error-alert';
 
 interface HeaderProps {
     title: string;
+    /** Conteúdo opcional exibido na mesma linha do título (ex.: versão), sem ocupar espaço vertical */
+    titleExtra?: React.ReactNode;
     onMenuClick?: () => void;
     notifications: Notification[];
     setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
@@ -14,7 +17,7 @@ interface HeaderProps {
     onLogout?: () => void;
 }
 
-export function Header({ title, onMenuClick, notifications, setNotifications, user, onLogout }: HeaderProps) {
+export function Header({ title, titleExtra, onMenuClick, notifications, setNotifications, user, onLogout }: HeaderProps) {
     const unreadCount = notifications.filter(n => !n.read).length;
 
     const markAllAsRead = () => {
@@ -37,7 +40,10 @@ export function Header({ title, onMenuClick, notifications, setNotifications, us
                     <Menu className="h-6 w-6" />
                 </Button>
                 <div>
-                    <h1 className="text-xl md:text-2xl font-bold">{title}</h1>
+                    <div className="flex items-baseline gap-2">
+                        <h1 className="text-xl md:text-2xl font-bold">{title}</h1>
+                        {titleExtra}
+                    </div>
                     <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
                         {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
                     </p>
@@ -95,6 +101,7 @@ export function Header({ title, onMenuClick, notifications, setNotifications, us
                                             <p className="text-sm text-foreground/80 leading-tight">
                                                 {n.message}
                                             </p>
+                                            {n.details && <ErrorDetailsPanel details={n.details} />}
                                         </div>
                                     ))}
                                 </div>

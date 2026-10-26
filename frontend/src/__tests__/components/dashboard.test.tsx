@@ -26,9 +26,9 @@ vi.mock('@/components/ui/multi-select-campaign', () => ({
 }));
 
 const mockCampaignsData = [
-  { name: 'Campanha Teste.01', date: '15/01/2026 09:00', month: 'D01-Jan', template_enviado: 'Template 1' },
-  { name: 'Campanha Teste.02', date: '20/01/2026 10:00', month: 'D02-Jan', template_enviado: 'Template 2' },
-  { name: 'Campanha Fev.01', date: '15/02/2026 08:00', month: 'D01-Fev', template_enviado: 'Template 3' },
+  { name: 'Campanha Teste.01', date: '15/01/2026 09:00', date_only: '15/01/2026', time_only: '09:00', month: 'D01-Jan', template_enviado: 'Template 1' },
+  { name: 'Campanha Teste.02', date: '20/01/2026 10:00', date_only: '20/01/2026', time_only: '10:00', month: 'D02-Jan', template_enviado: 'Template 2' },
+  { name: 'Campanha Fev.01', date: '15/02/2026 08:00', date_only: '15/02/2026', time_only: '08:00', month: 'D01-Fev', template_enviado: 'Template 3' },
 ] as any;
 
 const mockDashboardData = [
@@ -255,6 +255,7 @@ describe('Dashboard Component', () => {
     });
   });
 
+  // Campanha sem Data de Disparo cadastrada = não enviada
   test('filtra campanhas de mês "Não enviado"', async () => {
     const dataWithNotSent = [
       ...mockDashboardData,

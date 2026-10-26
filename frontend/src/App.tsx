@@ -26,7 +26,11 @@ import { Login } from '@/components/login';
 import { ChangePassword } from '@/components/change-password';
 import { Settings } from '@/components/settings';
 import { getBaseUrl } from '@/lib/config';
-import { handleAuthErrors, PASSWORD_CHANGE_REQUIRED_EVENT } from '@/lib/api';
+import {
+  handleAuthErrors, logError, toApiError, toUiError, ApiError, PASSWORD_CHANGE_REQUIRED_EVENT, UiError, UiErrorItem
+} from '@/lib/api';
+import { ErrorAlert } from '@/components/error-alert';
+import { endOfDay } from 'date-fns';
 
 // Definição de Tipos para os dados da API
 
@@ -37,6 +41,8 @@ export interface Notification {
   type: 'info' | 'success' | 'warning' | 'error';
   timestamp: Date;
   read: boolean;
+  /** Detalhes técnicos (ex.: falhas por campanha da sincronização automática) */
+  details?: Record<string, unknown> | null;
 }
 
 interface ReportCard {
@@ -96,7 +102,14 @@ function App() {
   const [tags, setTags] = useState<Tag[]>([]);
   // const [sectors, setSectors] = useState<Sector[]>([]);
   // const [lists, setLists] = useState<List[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  // Erro exibido na tela: resumo + detalhes técnicos opcionais ("Ver detalhes")
+  const [error, setErrorState] = useState<UiError | null>(null);
+  const setError = (value: string | UiError | null) =>
+    setErrorState(typeof value === 'string' ? { message: value } : value);
+  const showError = (context: string, err: unknown) => {
+    logError(context, err);
+    setError({ ...toUiError(err), title: context });
+  };
   const [isLoading, setIsLoading] = useState(false);
   const [loadingDots, setLoadingDots] = useState('');
   const [campaignsData, setCampaignsData] = useState<CampaignOption[]>([]);
@@ -139,6 +152,22 @@ function App() {
     localStorage.removeItem('user');
     setToken(null);
     setUser(null);
+    // Limpa os dados da sessão para que o próximo usuário no mesmo navegador não veja relatórios/notificações anteriores
+    setReportData(null);
+    setCardList(null);
+    setCampaignSummary(null);
+    setNotifications([]);
+    setTags([]);
+    setCampaignsData([]);
+    setErrorState(null);
+    setSuccessMessage(null);
+    setSelectedCampaigns([]);
+    setStartDate(undefined);
+    setEndDate(undefined);
+    setSource('');
+    setSelectedTags([]);
+    setSearchEmptyCampaign(false);
+    setWebhookEnabled(false);
   };
 
   useEffect(() => {
@@ -215,15 +244,14 @@ function App() {
     if (!token) return; // Prevent fetching while not authenticated
 
     const fetchData = async () => {
-      let errors: string[] = [];
+      const failures: UiErrorItem[] = [];
 
       // Etiquetas da Hablla só são usadas no filtro exclusivo do administrador
       if (user?.role === 'admin') {
         try {
           const tagsResponse = await apiFetch(`${BASE_URL}/api/tags`);
           if (!tagsResponse.ok) {
-            const errorData = await tagsResponse.json().catch(() => ({}));
-            throw new Error(`API Hablla (Tags): ${errorData.error || errorData.message || tagsResponse.statusText}`);
+            throw await toApiError(tagsResponse, 'Erro ao buscar as etiquetas da Hablla.');
           }
           const tagsData: Tag[] = await tagsResponse.json();
           if (Array.isArray(tagsData)) {
@@ -231,28 +259,31 @@ function App() {
           } else if ((tagsData as any).results && Array.isArray((tagsData as any).results)) {
             setTags((tagsData as any).results);
           }
-        } catch (error: any) {
-          errors.push(error.message || 'Erro ao buscar tags da Hablla.');
-          console.error('Error fetching tags:', error);
+        } catch (error) {
+          logError('Carregamento das etiquetas (Hablla)', error);
+          const uiError = toUiError(error);
+          failures.push({ label: 'Etiquetas (Hablla)', message: uiError.message, code: uiError.code, details: uiError.details });
         }
       }
 
       try {
         const campaignsResponse = await apiFetch(`${BASE_URL}/api/campaigns`);
-        if (campaignsResponse.ok) {
-          const campaignsDataJson = await campaignsResponse.json();
-          setCampaignsData(campaignsDataJson);
-        } else {
-          const errorData = await campaignsResponse.json().catch(() => ({}));
-          throw new Error(`Banco local (Campanhas): ${errorData.error || errorData.message || campaignsResponse.statusText}`);
+        if (!campaignsResponse.ok) {
+          throw await toApiError(campaignsResponse, 'Erro ao buscar as campanhas cadastradas.');
         }
-      } catch (error: any) {
-        errors.push(error.message || 'Erro ao buscar campanhas.');
-        console.error('Error fetching campaigns:', error);
+        setCampaignsData(await campaignsResponse.json());
+      } catch (error) {
+        logError('Carregamento das campanhas', error);
+        const uiError = toUiError(error);
+        failures.push({ label: 'Campanhas cadastradas', message: uiError.message, code: uiError.code, details: uiError.details });
       }
 
-      if (errors.length > 0) {
-        setError(errors.join(' | '));
+      if (failures.length > 0) {
+        setError({
+          title: 'Erro ao carregar dados iniciais',
+          message: failures.map(f => `${f.label}: ${f.message}`).join(' | '),
+          items: failures,
+        });
       } else {
         setError(null); // Limpar apenas se não houve erros
       }
@@ -280,6 +311,7 @@ function App() {
             type: l.type,
             timestamp: new Date(l.timestamp),
             read: false,
+            details: l.details || null,
             isBackend: true
           }));
 
@@ -385,9 +417,13 @@ function App() {
     params.append('board', selectedBoard);
 
     if (startDate && endDate) {
+      if (startDate > endDate) {
+        throw new Error('A Data de Início não pode ser posterior à Data de Fim.');
+      }
+      // A data de fim inclui o dia inteiro (até 23:59:59)
       const createdAt = {
         start_date: startDate.toISOString(),
-        end_date: endDate.toISOString(),
+        end_date: endOfDay(endDate).toISOString(),
       };
       params.append('created_at', JSON.stringify(createdAt));
     }
@@ -403,8 +439,7 @@ function App() {
 
     const response = await apiFetch(`${baseUrl}?${params.toString()}`);
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || errorData.message || 'Falha na busca por cartões.');
+      throw await toApiError(response, 'Falha na busca por cartões.');
     }
     return response.json();
   };
@@ -426,8 +461,8 @@ function App() {
         results = results.filter(card => selectedCampaigns.includes(card.campaign));
       }
       setReportData(results);
-    } catch (error: any) {
-      setError(error.message);
+    } catch (error) {
+      showError('Erro ao gerar o relatório', error);
     } finally {
       setIsLoading(false);
     }
@@ -449,8 +484,8 @@ function App() {
         results = results.filter(card => selectedCampaigns.includes(card.campaign));
       }
       setCardList(results);
-    } catch (error: any) {
-      setError(error.message);
+    } catch (error) {
+      showError('Erro ao buscar os cards', error);
     } finally {
       setIsLoading(false);
     }
@@ -529,22 +564,21 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
 
       if (startDate && endDate) {
         params.append('startDate', startDate.toISOString());
-        params.append('endDate', endDate.toISOString());
+        params.append('endDate', endOfDay(endDate).toISOString());
       }
       if (source) params.append('source', source);
       if (selectedTags.length > 0) params.append('tags', selectedTags.join(','));
 
       const response = await apiFetch(`${baseUrl}?${params.toString()}`);
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || errorData.message || 'Falha ao gerar resumo da campanha.');
+        throw await toApiError(response, 'Falha ao gerar resumo da campanha.');
       }
 
       const summaryData: CampaignSummary = await response.json();
       setCampaignSummary(summaryData);
 
-    } catch (error: any) {
-      setError(error.message);
+    } catch (error) {
+      showError('Erro ao gerar o resumo da campanha', error);
     } finally {
       setIsLoading(false);
     }
@@ -569,15 +603,14 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
           board: selectedBoard,
           boardName: campaignSummary.board,
           startDate: startDate ? startDate.toISOString() : undefined,
-          endDate: endDate ? endDate.toISOString() : undefined,
+          endDate: endDate ? endOfDay(endDate).toISOString() : undefined,
           source: source,
           tags: selectedTags.length > 0 ? selectedTags.join(',') : undefined
         }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || errorData.message || 'Falha ao atualizar campanha.');
+        throw await toApiError(response, 'Falha ao atualizar campanha.');
       }
 
       const summaryData: CampaignSummary = await response.json();
@@ -589,13 +622,15 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
         type: 'success',
       });
 
-    } catch (error: any) {
-      setError(error.message);
+    } catch (error) {
+      showError('Erro ao atualizar a campanha', error);
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Atualiza o resumo completo de todas as campanhas cadastradas no quadro padrão.
+  // Não usa os filtros da tela (período, fonte, etiquetas): o resultado alimenta o Dashboard.
   const handleUpdateAllCampaigns = async () => {
     if (!campaignsData || campaignsData.length === 0) return;
 
@@ -608,59 +643,60 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
     setSuccessMessage(null);
 
     let updatedCount = 0;
-    const failedList: string[] = [];
-    const selectedBoardName = boards.find(b => b.id === selectedBoard)?.name || selectedBoard;
+    const failures: UiErrorItem[] = [];
+    const defaultBoard = boards[0];
+    let aborted = false;
 
-    try {
-      for (const campaign of campaignsData) {
-        try {
-          // Usamos a função de refresh existente para cada campanha
-          const response = await apiFetch(`${BASE_URL}/api/campaign-summary/refresh`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              campaign: campaign.name,
-              board: selectedBoard,
-              boardName: selectedBoardName,
-              // Mantém os filtros globais se selecionados, ou undefined para usar o padrão da campanha
-              startDate: startDate ? startDate.toISOString() : undefined,
-              endDate: endDate ? endDate.toISOString() : undefined,
-              source: source,
-              tags: selectedTags.length > 0 ? selectedTags.join(',') : undefined
-            }),
-          });
+    for (const campaign of campaignsData) {
+      if (aborted) {
+        failures.push({ label: campaign.name, message: 'Não processada: a atualização foi interrompida.', code: 'SKIPPED' });
+        continue;
+      }
+      try {
+        const response = await apiFetch(`${BASE_URL}/api/campaign-summary/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ campaign: campaign.name, board: defaultBoard.id, boardName: defaultBoard.name }),
+        });
 
-          if (response.ok) {
-            updatedCount++;
-          } else {
-            console.error(`Falha ao atualizar campanha: ${campaign.name}`);
-            failedList.push(campaign.name);
-          }
-        } catch (err) {
-          console.error(`Erro ao atualizar campanha: ${campaign.name}`, err);
-          failedList.push(campaign.name);
+        if (!response.ok) {
+          throw await toApiError(response, 'Falha ao atualizar campanha.');
+        }
+        updatedCount++;
+      } catch (err) {
+        logError(`Atualização da campanha "${campaign.name}"`, err);
+        const uiError = toUiError(err);
+        failures.push({ label: campaign.name, message: uiError.message, code: uiError.code, details: uiError.details });
+        // Sessão encerrada, falta de permissão ou credencial da Hablla inválida afetam todas as campanhas
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403 || err.code === 'HABLLA_AUTH')) {
+          aborted = true;
         }
       }
+    }
 
-      let message = `Processo finalizado! Atualizadas: ${updatedCount}.`;
-      if (failedList.length > 0) {
-        message += ` Falhas: ${failedList.length} (${failedList.join(', ')}).`;
-      }
+    const total = campaignsData.length;
+    if (failures.length === 0) {
+      const message = `Processo finalizado! ${updatedCount} de ${total} campanhas atualizadas.`;
       setSuccessMessage(message);
-
+      addNotification({ title: 'Atualização de Campanhas', message, type: 'success' });
+    } else {
+      const failedCount = failures.filter(f => f.code !== 'SKIPPED').length;
+      const summary = `${updatedCount} de ${total} campanhas atualizadas; ${failedCount} com erro${failures.length > failedCount ? ` e ${failures.length - failedCount} não processadas` : ''}.`;
+      setError({
+        title: updatedCount === 0 ? 'Nenhuma campanha foi atualizada' : 'Atualização concluída com falhas',
+        message: `${summary} Principal causa: ${failures[0].message}`,
+        items: failures,
+        variant: updatedCount === 0 ? 'error' : 'warning',
+      });
       addNotification({
         title: 'Atualização de Campanhas',
-        message: message,
-        type: failedList.length === 0 ? 'success' : 'warning',
+        message: summary,
+        type: updatedCount === 0 ? 'error' : 'warning',
+        details: { failures: failures.map(f => ({ campaign: f.label, code: f.code, message: f.message, details: f.details })) },
       });
-
-    } catch (error: any) {
-      setError(`Erro geral ao atualizar campanhas: ${error.message}`);
-    } finally {
-      setIsLoading(false);
     }
+
+    setIsLoading(false);
   };
 
 
@@ -754,8 +790,8 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
       }
 
       setSuccessMessage(data.message || 'Resumo enviado com sucesso.');
-    } catch (error: any) {
-      setError(error.message || 'Falha ao enviar o resumo pelo webhook.');
+    } catch (error) {
+      showError('Erro ao enviar o resumo pelo webhook', error);
     } finally {
       setIsSendingWebhook(false);
     }
@@ -851,18 +887,30 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
                         <>
                           <div className='min-w-0 md:col-span-1 xl:col-span-2'>
                             <Label htmlFor="board">Quadro</Label>
-                            <Select value={selectedBoard} onValueChange={setSelectedBoard}>
-                              <SelectTrigger id="board">
-                                <SelectValue placeholder="Selecione o quadro" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {boards.map((board) => (
-                                  <SelectItem key={board.id} value={board.id}>
-                                    {board.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            {/* Por enquanto apenas o quadro padrão (IA Manutenção) é suportado */}
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span tabIndex={0} className="block">
+                                    <Select value={selectedBoard} onValueChange={setSelectedBoard} disabled>
+                                      <SelectTrigger id="board">
+                                        <SelectValue placeholder="Selecione o quadro" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {boards.map((board) => (
+                                          <SelectItem key={board.id} value={board.id}>
+                                            {board.name}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Recurso ainda não implementado: os relatórios usam o quadro IA Manutenção.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                           </div>
 
                           <div className='min-w-0 md:col-span-1 xl:col-span-2'>
@@ -969,12 +1017,7 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
                 </CardContent>
               </Card>
 
-              {error && (
-                <Alert variant="destructive" className="mt-8">
-                  <AlertTitle>Erro</AlertTitle>
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
+              {error && <ErrorAlert error={error} className="mt-8" />}
 
               {successMessage && (
                 <Alert variant="default" className="mt-8 border-green-500 text-green-700 bg-green-50">

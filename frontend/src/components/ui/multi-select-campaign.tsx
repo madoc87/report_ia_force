@@ -33,6 +33,10 @@ interface MultiSelectCampaignProps {
   onChange: (selected: string[]) => void;
   className?: string;
   placeholder?: string;
+  searchPlaceholder?: string;
+  emptyText?: string;
+  /** Permite adicionar um valor digitado que não está na lista (padrão: true) */
+  allowCustom?: boolean;
 }
 
 export function MultiSelectCampaign({
@@ -41,6 +45,9 @@ export function MultiSelectCampaign({
   onChange,
   className,
   placeholder = "Selecione as campanhas...",
+  searchPlaceholder = "Buscar campanha por nome, data ou mês...",
+  emptyText = "Nenhuma campanha encontrada.",
+  allowCustom = true,
 }: MultiSelectCampaignProps) {
   const [open, setOpen] = React.useState(false);
   const [inputValue, setInputValue] = React.useState("");
@@ -124,14 +131,14 @@ export function MultiSelectCampaign({
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
         <Command filter={filterFunction}>
           <CommandInput
-            placeholder="Buscar campanha por nome, data ou mês..."
+            placeholder={searchPlaceholder}
             value={inputValue}
             onValueChange={setInputValue}
           />
           <CommandEmpty>
             <div className="p-2 text-sm text-muted-foreground text-center">
-              Nenhuma campanha encontrada.
-              {inputValue && (
+              {emptyText}
+              {allowCustom && inputValue && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -189,7 +196,7 @@ export function MultiSelectCampaign({
                  Mas se quisermos mostrar "Criar" mesmo quando há matches parciais, precisamos de lógica extra.
                  Por simplicidade e UX padrão, vamos deixar no CommandEmpty ou adicionar um item fixo se não existir na lista.
              */}
-            {inputValue && !options.some(opt => opt.name === inputValue) && !selected.includes(inputValue) && (
+            {allowCustom && inputValue && !options.some(opt => opt.name === inputValue) && !selected.includes(inputValue) && (
               <CommandItem
                 value={inputValue}
                 onSelect={() => handleSelect(inputValue)}

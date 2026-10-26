@@ -191,8 +191,25 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
         }
     };
 
+    // Versão do backend, comparada com a do frontend no selo ao lado do título
+    const [backendVersion, setBackendVersion] = useState<string | null>(null);
+    const fetchBackendVersion = async () => {
+        try {
+            const response = await fetchWithAuth(`${BASE_URL}/api/version`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setBackendVersion(data.version || null);
+            }
+        } catch (err) {
+            console.error('Erro ao buscar a versão do backend:', err);
+        }
+    };
+
     useEffect(() => {
         if (user?.role === 'admin') {
+            fetchBackendVersion();
             fetchUsers();
             fetchCronSettings();
             fetchBackups();
@@ -534,7 +551,15 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
 
     return (
         <div className="container mx-auto p-4 md:p-8 space-y-8">
-            <Header title="Configurações" onMenuClick={onMenuClick} notifications={notifications} setNotifications={setNotifications} user={user} onLogout={onLogout} />
+            <Header
+                title="Configurações"
+                titleExtra={<VersionBadge backendVersion={backendVersion} />}
+                onMenuClick={onMenuClick}
+                notifications={notifications}
+                setNotifications={setNotifications}
+                user={user}
+                onLogout={onLogout}
+            />
 
             <Card>
                 <CardHeader>
@@ -1031,5 +1056,37 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
             </Card>
 
         </div>
+    );
+}
+
+// Selo discreto com a versão da aplicação (frontend e backend), exibido na mesma linha do título.
+// Se as versões forem diferentes, um dos containers não recebeu o último deploy.
+function VersionBadge({ backendVersion }: { backendVersion: string | null }) {
+    const frontendVersion = __APP_VERSION__;
+    const mismatch = Boolean(backendVersion && backendVersion !== frontendVersion);
+    const label = mismatch ? `v${frontendVersion} · API v${backendVersion}` : `v${frontendVersion}`;
+    const description = backendVersion
+        ? (mismatch
+            ? `Versões diferentes: frontend v${frontendVersion} e backend v${backendVersion}. Um dos containers não está atualizado.`
+            : `Frontend e backend na versão v${frontendVersion}`)
+        : `Frontend v${frontendVersion} (versão do backend indisponível)`;
+
+    return (
+        <TooltipProvider>
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <span
+                        tabIndex={0}
+                        className={`text-xs font-mono font-medium cursor-default ${mismatch ? 'text-amber-500' : 'text-muted-foreground'}`}
+                        aria-label={description}
+                    >
+                        {label}
+                    </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                    <p>{description}</p>
+                </TooltipContent>
+            </Tooltip>
+        </TooltipProvider>
     );
 }
