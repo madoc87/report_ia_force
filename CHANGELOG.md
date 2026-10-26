@@ -846,3 +846,36 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
   - Dependências atualizadas via `npm audit fix` (sem mudanças de versão principal): backend (`multer`, `path-to-regexp`, `qs`, `body-parser` e outras) e frontend (`dompurify` em produção; `vite`, `vitest`, `postcss`, `rollup` e outras ferramentas de build). Os alertas restantes do frontend estão apenas em ferramentas de desenvolvimento e exigem atualizações de versão principal (Vite 7, Tailwind 4, typescript-eslint 8), planejadas para uma etapa separada.
 - **Testes:**
   - Novo arquivo `backend/__tests__/integration/security.test.js` (34 testes) e `frontend/src/__tests__/unit/api.test.ts`. Testes de autenticação atualizados para os novos códigos de status.
+
+## 47. Versão da Aplicação, Filtro por Dia de Disparo, Erros Detalhados e Correções de Lógica (23/10/2026) — v1.2.0
+
+- **Versão da aplicação:**
+  - Frontend e backend passam a ter versão própria (`package.json`, agora `1.2.0`). A versão do frontend é embutida no build e a do backend é exposta em `GET /api/version` (somente administrador).
+  - A tela de Configurações mostra um selo discreto ao lado do título (ex.: `v1.2.0`). Se as versões do frontend e do backend forem diferentes, o selo fica em destaque e indica que um dos containers não recebeu o último deploy.
+- **Novo modo de filtro "Por Dia de Disparo" no Dashboard:**
+  - Lista os dias a partir do campo "Data de Disparo" do cadastro de campanhas (mais recentes primeiro, com dia da semana e quantidade de campanhas) e permite selecionar um ou vários dias. O campo "Dt. Envio" do relatório não é usado nesse filtro.
+- **Erros de sincronização mais claros:**
+  - O backend classifica as falhas da Hablla (credencial inválida, recurso não encontrado, limite de requisições, instabilidade, tempo esgotado, falha de conexão, resposta inválida e limite de 10.000 cards) e responde com `code`, mensagem resumida e `details` (campanha, etapa, página, tentativas, status HTTP, trecho da resposta e dica de como resolver). Token inválido da Hablla, que chega como HTTP 404, é identificado como erro de credencial.
+  - As requisições à Hablla têm tempo limite de 30 segundos, com novas tentativas e espera crescente (respeitando `Retry-After`).
+  - Na tela, os erros mostram um resumo e um link "Ver detalhes" com as informações técnicas e o botão "Copiar detalhes". No console do navegador, os erros aparecem agrupados com contexto, código e detalhes.
+  - "Atualizar todas as campanhas" lista cada campanha que falhou com o motivo, e interrompe o processo quando o erro afeta todas (sessão encerrada, sem permissão ou credencial da Hablla inválida).
+  - A sincronização automática (cron) grava na notificação o resumo e a lista de campanhas com falha. A notificação também tem "Ver detalhes". Também interrompe o processo diante de credencial inválida e valida o formato dos horários configurados.
+- **Correções de lógica:**
+  - Consultas com filtros (período, fonte, etiquetas) não são mais gravadas no cache, que guarda sempre o total de cada campanha. Antes, um resumo filtrado substituía o total e afetava o Dashboard.
+  - "Atualizar todas as campanhas" usa sempre o quadro padrão e não envia os filtros da tela.
+  - O Dashboard considera somente o quadro padrão (IA Manutenção). Na tela de Relatórios, o seletor de Quadro fica visível, porém desabilitado, com o aviso "Recurso ainda não implementado".
+  - O Dashboard reprocessa os dados quando a lista de campanhas chega depois do carregamento; antes, o mês aparecia como "Unknown" no primeiro acesso.
+  - Meses fiscal e comercial passam a considerar o ano (ex.: "Out/2026"), sem misturar anos diferentes; o mês comercial vira corretamente de dezembro para janeiro. A comparação "vs. mês anterior" usa o mês de calendário anterior e só aparece quando há dados nele.
+  - As conversões são calculadas a partir dos números brutos, com a mesma fórmula do backend nos modos individual e agrupado: (Vendas IA + Vendas Manual) / Clientes e (Vendas IA + Vendas Manual) / Respostas. Antes as médias perdiam as casas decimais e o modo agrupado usava outra fórmula.
+  - Campanhas sem Data de Disparo cadastrada (não enviadas) ficam fora do Dashboard.
+  - A data de fim do período inclui o dia inteiro, e a data de início não pode ser posterior à de fim.
+  - Ao sair da conta, os dados da sessão (relatórios, notificações, filtros) são limpos.
+  - O nome do quadro gravado pela sincronização automática passou a ser "IA Manutenção" (antes "Board Agendado").
+  - Erros ao carregar o Dashboard passam a ser exibidos na tela (antes a página mostrava valores zerados sem aviso).
+- **Requisições à Hablla (revisadas com a documentação da API):**
+  - Limite de paginação: a primeira página já informa o total; acima de 200 páginas (10.000 cards) a consulta falha na hora com mensagem clara, em vez de fazer 200 requisições e receber "Pagination too deep".
+  - A rota de listas usava `/v3/.../boards/{id}/lists`, que não existe na API; corrigida para `/v1/.../boards/{id}/lists` (rota hoje não usada pela interface).
+  - A sincronização automática não inicia uma nova execução enquanto a anterior ainda estiver em andamento.
+- **nginx do frontend:** `index.html` e `runtime-config.json` sem cache e arquivos de `/assets` com cache longo; arquivos inexistentes em `/assets` respondem 404 (antes devolviam o `index.html`, o que podia deixar a tela em branco após um deploy). Compressão gzip habilitada.
+- **Fuso horário:** o container do backend usa `America/Sao_Paulo` (`tzdata` + `TZ` no Dockerfile), e o agendamento usa esse fuso explicitamente. Agendamentos, datas gravadas pelo banco e datas do resumo ficam no horário de Brasília.
+- **Testes:** novos `backend/__tests__/integration/sync.test.js`, `frontend/src/__tests__/unit/dashboard-utils.test.ts` e `frontend/src/__tests__/components/error-alert.test.tsx`.

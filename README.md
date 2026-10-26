@@ -26,6 +26,8 @@ A aplicação foi preparada arquiteturalmente para rodar de forma isolada tanto 
     - **`ADMIN_EMAIL` / `ADMIN_PASSWORD`:** usadas apenas para criar o primeiro administrador quando o banco não tem nenhum (senha com no mínimo 12 caracteres, troca obrigatória no primeiro acesso). Depois disso são ignoradas; para recuperar o acesso, defina temporariamente `ADMIN_RESET_PASSWORD=true`.
   - *Lembre-se de configurar a variável `DATABASE_PATH` apontando para o disco rígido:* E.g. `DATABASE_PATH=/app/data/database.sqlite`
   - Recomendado: `CORS_ORIGIN` com a URL do frontend. Opcional: `WEBHOOK_REPORT_URL` para habilitar o envio do resumo por webhook.
+  - O fuso horário (`America/Sao_Paulo`) já vem configurado no `Dockerfile`; não é preciso definir `TZ` no EasyPanel.
+- **Versão:** a cada release, atualize o campo `version` de `backend/package.json` e `frontend/package.json` (o mesmo número nos dois). A versão aparece ao lado do título em Configurações e fica em destaque se os containers estiverem em versões diferentes.
 - **Mounts / Volumes:**
   - Crie um Volume na página de _Mounts_ apontando para o diretório `/app/data`. Assim toda a informação do SQLite sobreviverá aos deploys! Os backups do banco ficam em `/app/data/backups`, no mesmo volume.
 - **Network / Portas:**
