@@ -242,6 +242,9 @@ setInterval(() => {
 // não revele quais e-mails estão cadastrados.
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync('dummy-password-for-timing', 10);
 
+// Versão do backend (exibida para o administrador na tela de Configurações)
+const APP_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version;
+
 // Rota de Teste de Status do Servidor
 app.get('/test', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Servidor backend do Report IA Force executando corretamente!' });
@@ -402,6 +405,11 @@ const initializeDatabase = async (dbPath) => {
     )
   `);
 
+  // Detalhes técnicos (JSON) das notificações de sincronização
+  try {
+    await db.exec(`ALTER TABLE sys_logs ADD COLUMN details TEXT`);
+  } catch (err) { }
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS login_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -485,6 +493,83 @@ if (process.env.NODE_ENV !== 'test') {
   })();
 }
 
+// --- Erros de sincronização ---
+// Erro com código, mensagem resumida (exibida ao usuário) e detalhes técnicos (exibidos sob demanda).
+// Os detalhes nunca incluem tokens ou credenciais.
+class SyncError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'SyncError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+const HABLLA_REQUEST_TIMEOUT_MS = 30000;
+const HABLLA_MAX_RETRIES = 3;
+// A Hablla recusa páginas acima de ~200 ("Pagination too deep"): 200 páginas x 50 = 10.000 cards por consulta
+const HABLLA_MAX_PAGES = 200;
+const HABLLA_PAGE_LIMIT = 50;
+
+const truncate = (text, max = 300) => {
+  if (!text) return undefined;
+  const str = String(text);
+  return str.length > max ? `${str.slice(0, max)}…` : str;
+};
+
+// Converte uma resposta HTTP de erro da Hablla em um SyncError com mensagem clara
+const buildHabllaHttpError = (status, bodyText, ctx = {}) => {
+  const details = { ...ctx, httpStatus: status, responseBody: truncate(bodyText) };
+
+  if (/pagination too deep/i.test(bodyText || '')) {
+    return new SyncError('HABLLA_PAGINATION_LIMIT',
+      'A consulta passou do limite de 10.000 cards da Hablla.',
+      { ...details, hint: 'Reduza o período ou divida a campanha em consultas menores.' });
+  }
+  // A Hablla responde token inválido também com HTTP 404 ("Invalid workspace token", errorCode 212)
+  if (status === 401 || status === 403 || /invalid[\w\s]*token/i.test(bodyText || '')) {
+    return new SyncError('HABLLA_AUTH',
+      `A Hablla recusou o acesso (HTTP ${status}).`,
+      { ...details, hint: 'Verifique as variáveis API_TOKEN_HABLLA e WORKSPACE_ID_HABLLA do backend.' });
+  }
+  if (status === 404) {
+    return new SyncError('HABLLA_NOT_FOUND',
+      'O recurso não foi encontrado na Hablla (HTTP 404).',
+      { ...details, hint: 'Confira o ID do quadro (BOARD_ID_HABLLA) e do workspace.' });
+  }
+  if (status === 429) {
+    return new SyncError('HABLLA_RATE_LIMIT',
+      'A Hablla limitou o número de requisições (HTTP 429).',
+      { ...details, hint: 'Aguarde alguns minutos e tente novamente.' });
+  }
+  if (status >= 500) {
+    return new SyncError('HABLLA_SERVER_ERROR',
+      `A Hablla está com instabilidade (HTTP ${status}).`,
+      { ...details, hint: 'Erro no servidor da Hablla. Tente novamente mais tarde.' });
+  }
+  return new SyncError('HABLLA_BAD_REQUEST',
+    `A Hablla rejeitou a consulta (HTTP ${status}).`,
+    { ...details, hint: 'Verifique os filtros usados (datas, campanha, etiquetas).' });
+};
+
+// Converte falhas de rede/timeout em um SyncError
+const buildHabllaNetworkError = (error, ctx = {}) => {
+  const isTimeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+  if (isTimeout) {
+    return new SyncError('HABLLA_TIMEOUT',
+      `A Hablla não respondeu em ${HABLLA_REQUEST_TIMEOUT_MS / 1000} segundos.`,
+      { ...ctx, cause: error.message, hint: 'Tente novamente; se persistir, a Hablla pode estar fora do ar.' });
+  }
+  return new SyncError('HABLLA_UNREACHABLE',
+    'Não foi possível conectar à Hablla.',
+    { ...ctx, cause: error?.code || error?.message, hint: 'Verifique a conexão de rede do servidor e o status da Hablla.' });
+};
+
+const isRetriableHabllaError = (err) =>
+  ['HABLLA_SERVER_ERROR', 'HABLLA_RATE_LIMIT', 'HABLLA_TIMEOUT', 'HABLLA_UNREACHABLE'].includes(err.code);
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
   const url = new URL(`${HABLLA_API_URL}${endpoint}`);
   Object.entries(queryParams).forEach(([key, value]) => {
@@ -502,51 +587,83 @@ const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
   let totalPages = 1;
 
   do {
+    if (page > HABLLA_MAX_PAGES) {
+      throw new SyncError('HABLLA_PAGINATION_LIMIT',
+        'A consulta passou do limite de 10.000 cards da Hablla.',
+        { endpoint, totalPages, hint: 'Reduza o período ou divida a campanha em consultas menores.' });
+    }
+
     url.searchParams.set('page', page);
     console.log(`Fetching URL: ${url}`);
 
     let attempt = 0;
     let success = false;
-    const maxRetries = 3;
 
-    while (attempt < maxRetries && !success) {
+    while (!success) {
+      attempt++;
+      const ctx = { endpoint, page, totalPages, attempts: attempt };
       try {
-        const response = await fetch(url, {
-          headers: {
-            'Authorization': API_TOKEN_HABLLA,
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (!response.ok) {
-          // Se for erro de servidor (5xx) ou Rate Limit (429), lança erro para cair no catch e tentar de novo
-          if (response.status >= 500 || response.status === 429) {
-            throw new Error(`Server error: ${response.status}`);
-          }
-
-          // Se for erro 4xx (exceto 429), é erro definitivo (ex: 400, 401), não adianta tentar de novo
-          const errorBody = await response.text();
-          console.error('API Error Body:', errorBody);
-          throw new Error(`API request failed with status ${response.status}: ${errorBody} (Non-retriable)`);
+        let response;
+        try {
+          response = await fetch(url, {
+            headers: {
+              'Authorization': API_TOKEN_HABLLA,
+              'Content-Type': 'application/json',
+            },
+            signal: AbortSignal.timeout(HABLLA_REQUEST_TIMEOUT_MS),
+          });
+        } catch (networkError) {
+          throw buildHabllaNetworkError(networkError, ctx);
         }
 
-        const data = await response.json();
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => '');
+          console.error(`[Hablla] HTTP ${response.status} em ${endpoint} (página ${page}):`, truncate(errorBody));
+          const httpError = buildHabllaHttpError(response.status, errorBody, ctx);
+          if (httpError.code === 'HABLLA_RATE_LIMIT') {
+            const retryAfter = Number(response.headers.get('retry-after'));
+            httpError.retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 10000) : null;
+          }
+          throw httpError;
+        }
+
+        let data;
+        try {
+          data = await response.json();
+        } catch (parseError) {
+          throw new SyncError('HABLLA_INVALID_RESPONSE',
+            'A Hablla devolveu uma resposta em formato inesperado.',
+            { ...ctx, cause: parseError.message });
+        }
+
+        // Algumas rotas podem devolver a lista diretamente, sem paginação
+        if (Array.isArray(data)) {
+          data = { results: data, totalPages: 1 };
+        }
+
+        if (!Array.isArray(data?.results)) {
+          throw new SyncError('HABLLA_INVALID_RESPONSE',
+            'A Hablla devolveu uma resposta sem a lista de resultados.',
+            { ...ctx, receivedKeys: data && typeof data === 'object' ? Object.keys(data).join(', ') : typeof data });
+        }
+
         allResults = allResults.concat(data.results);
-        totalPages = data.totalPages;
-        success = true; // Sai do loop de tentativas
+        totalPages = Number(data.totalPages) || 1;
+        success = true;
 
+        // A 1ª página já informa o total: se passar do limite da Hablla, falha na hora,
+        // em vez de fazer 200 requisições e só então receber "Pagination too deep".
+        if (page === 1 && totalPages > HABLLA_MAX_PAGES) {
+          throw new SyncError('HABLLA_PAGINATION_LIMIT',
+            `A consulta tem cerca de ${(totalPages * HABLLA_PAGE_LIMIT).toLocaleString('pt-BR')} cards, acima do limite de 10.000 da Hablla.`,
+            { endpoint, totalPages, maxPages: HABLLA_MAX_PAGES, hint: 'Reduza o período ou divida a campanha em consultas menores.' });
+        }
       } catch (error) {
-        attempt++;
-        const isRetriable = error.message.includes('ECONNRESET') ||
-          error.message.includes('socket hang up') ||
-          error.message.includes('Server error') ||
-          error.code === 'ECONNRESET';
-
-        if (isRetriable && attempt < maxRetries) {
-          console.warn(`Attempt ${attempt} failed for page ${page}. Retrying in 1s... Error: ${error.message}`);
-          await new Promise(resolve => setTimeout(resolve, 1000));
+        if (isRetriableHabllaError(error) && attempt < HABLLA_MAX_RETRIES) {
+          const waitMs = error.retryAfterMs || attempt * 1000;
+          console.warn(`[Hablla] Tentativa ${attempt} falhou na página ${page} (${error.code}). Nova tentativa em ${waitMs}ms.`);
+          await sleep(waitMs);
         } else {
-          // Se esgotou as tentativas ou não é erro de rede, repassa o erro para parar o processo
           throw error;
         }
       }
@@ -557,6 +674,29 @@ const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
 
   return allResults;
 };
+
+// Adiciona campanha/etapa ao erro e converte erros inesperados em SyncError
+const withSyncContext = (error, context) => {
+  if (error instanceof SyncError) {
+    error.details = { ...context, ...error.details };
+    return error;
+  }
+  return new SyncError('UNEXPECTED_ERROR', 'Erro inesperado durante a sincronização.', {
+    ...context,
+    cause: error?.message
+  });
+};
+
+// Resposta HTTP padronizada para falhas de sincronização
+const sendSyncError = (res, error, fallbackMessage) => {
+  const syncError = withSyncContext(error, {});
+  const status = syncError.code.startsWith('HABLLA_') ? 502 : 500;
+  console.error(`[Sync] ${fallbackMessage}:`, syncError.code, syncError.message, syncError.details);
+  return sendError(res, status, syncError.code, syncError.message, {
+    details: { ...syncError.details, timestamp: new Date().toISOString() }
+  });
+};
+
 
 // --- Helper: Calculate Summary ---
 const calculateSummary = (cards, boardName) => {
@@ -633,8 +773,17 @@ const calculateSummary = (cards, boardName) => {
 };
 
 // --- Helper: Process Single Campaign (Fetch/Cache) ---
-const processCampaign = async (campaignName, boardId, boardName, filters, forceRefresh = false) => {
-  if (!forceRefresh) {
+// O cache (campaign_summaries) guarda sempre o resultado COMPLETO da campanha, que alimenta o Dashboard.
+// Consultas com filtros (período, fonte, etiquetas) são calculadas na hora e nunca gravadas no cache,
+// para não substituir o total da campanha por um recorte parcial.
+const DEFAULT_BOARD_NAME = 'IA Manutenção';
+
+const processCampaign = async (campaignName, boardId, boardName, filters = {}, forceRefresh = false) => {
+  const hasFilters = Object.keys(filters).length > 0;
+  const resolvedBoardName = boardName || (boardId === DEFAULT_BOARD_ID ? DEFAULT_BOARD_NAME : `Quadro ${boardId}`);
+  const context = { campaign: campaignName, boardId };
+
+  if (!forceRefresh && !hasFilters) {
     const cached = await db.get(
       'SELECT * FROM campaign_summaries WHERE campaign_name = ? AND board_id = ?',
       [campaignName, boardId]
@@ -673,43 +822,64 @@ const processCampaign = async (campaignName, boardId, boardName, filters, forceR
     }
   }
 
-  console.log(`${forceRefresh ? 'Refreshing' : 'Cache miss'} for campaign: ${campaignName}. Fetching from API...`);
+  console.log(`${hasFilters ? 'Filtered query' : (forceRefresh ? 'Refreshing' : 'Cache miss')} for campaign: ${campaignName}. Fetching from API...`);
 
   const queryParams = {
     board: boardId,
-    limit: 50,
+    limit: HABLLA_PAGE_LIMIT,
     campaign: campaignName,
     ...filters
   };
 
-  const cards = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/cards`, queryParams);
-  const filteredCards = cards.filter(c => c.campaign === campaignName);
-  const summary = calculateSummary(filteredCards, boardName || 'Unknown Board');
+  let cards;
+  try {
+    cards = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/cards`, queryParams);
+  } catch (error) {
+    throw withSyncContext(error, { ...context, stage: 'Busca dos cards na Hablla' });
+  }
 
-  await db.run(
-    `INSERT OR REPLACE INTO campaign_summaries (
-      campaign_name, board_id, board_name, date_range, total_clients, total_phones, 
-      total_hablla_responses, sales_ia, sales_manual, not_received_msg, 
-      total_cost, average_sold, response_rate, conversion_sales_clients, 
-      conversion_sales_responses, last_updated
-    )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`,
-    [
-      campaignName, boardId, summary.board, summary.dateRange,
-      summary._raw.totalClients, summary._raw.totalPhones,
-      summary._raw.totalHabllaResponses, summary._raw.salesIA,
-      summary._raw.salesManual, summary._raw.notReceivedMsg,
-      summary.totalCost, summary.averageSold, summary.responseRate,
-      summary.conversionSalesClients, summary.conversionSalesResponses
-    ]
-  );
+  let summary;
+  try {
+    const filteredCards = cards.filter(c => c && c.campaign === campaignName);
+    summary = calculateSummary(filteredCards, resolvedBoardName);
+  } catch (error) {
+    throw withSyncContext(error, { ...context, stage: 'Cálculo do resumo', cardsReceived: cards.length });
+  }
+
+  if (!hasFilters) {
+    try {
+      await db.run(
+        `INSERT OR REPLACE INTO campaign_summaries (
+          campaign_name, board_id, board_name, date_range, total_clients, total_phones,
+          total_hablla_responses, sales_ia, sales_manual, not_received_msg,
+          total_cost, average_sold, response_rate, conversion_sales_clients,
+          conversion_sales_responses, last_updated
+        )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`,
+        [
+          campaignName, boardId, summary.board, summary.dateRange,
+          summary._raw.totalClients, summary._raw.totalPhones,
+          summary._raw.totalHabllaResponses, summary._raw.salesIA,
+          summary._raw.salesManual, summary._raw.notReceivedMsg,
+          summary.totalCost, summary.averageSold, summary.responseRate,
+          summary.conversionSalesClients, summary.conversionSalesResponses
+        ]
+      );
+    } catch (error) {
+      throw new SyncError('DB_WRITE_ERROR', 'Os dados foram obtidos, mas não puderam ser salvos no banco.', {
+        ...context, stage: 'Gravação no banco de dados', cause: error.message
+      });
+    }
+  }
 
   return {
     ...summary,
     lastUpdated: new Date().toISOString(),
-    fromCache: false
+    fromCache: false,
+    filtered: hasFilters
   };
 };
+
 
 // --- Helper: Aggregate Summaries ---
 const aggregateSummaries = (summaries) => {
@@ -849,8 +1019,7 @@ app.get('/api/cards', authenticateToken, authorizeAdmin, async (req, res) => {
     const data = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/cards`, queryParams);
     res.status(200).json(data);
   } catch (error) {
-    console.error('Error fetching cards:', error);
-    res.status(500).json({ message: 'Error fetching cards from Hablla API', error: error.message });
+    sendSyncError(res, withSyncContext(error, { stage: 'Busca de cards na Hablla' }), 'Erro ao buscar cards');
   }
 });
 
@@ -859,8 +1028,7 @@ app.get('/api/tags', authenticateToken, authorizeAdmin, async (req, res) => {
     const data = await fetchHabllaAPI(`/v1/workspaces/${WORKSPACE_ID_HABLLA}/tags`);
     res.status(200).json(data);
   } catch (error) {
-    console.error('Error fetching tags:', error);
-    res.status(500).json({ message: 'Error fetching tags from Hablla API', error: error.message });
+    sendSyncError(res, withSyncContext(error, { stage: 'Busca de etiquetas na Hablla' }), 'Erro ao buscar etiquetas');
   }
 });
 
@@ -869,8 +1037,7 @@ app.get('/api/sectors', authenticateToken, authorizeAdmin, async (req, res) => {
     const data = await fetchHabllaAPI(`/v1/workspaces/${WORKSPACE_ID_HABLLA}/sectors`);
     res.status(200).json(data);
   } catch (error) {
-    console.error('Error fetching sectors:', error);
-    res.status(500).json({ message: 'Error fetching sectors from Hablla API', error: error.message });
+    sendSyncError(res, withSyncContext(error, { stage: 'Busca de setores na Hablla' }), 'Erro ao buscar setores');
   }
 });
 
@@ -880,11 +1047,10 @@ app.get('/api/lists', authenticateToken, authorizeAdmin, async (req, res) => {
     if (!isValidHabllaId(boardId)) {
       return sendError(res, 400, 'INVALID_BOARD', 'ID de quadro inválido.');
     }
-    const data = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/boards/${encodeURIComponent(boardId)}/lists`);
+    const data = await fetchHabllaAPI(`/v1/workspaces/${WORKSPACE_ID_HABLLA}/boards/${encodeURIComponent(boardId)}/lists`);
     res.status(200).json(data);
   } catch (error) {
-    console.error('Error fetching lists:', error);
-    res.status(500).json({ message: 'Error fetching lists from Hablla API', error: error.message });
+    sendSyncError(res, withSyncContext(error, { stage: 'Busca de listas na Hablla' }), 'Erro ao buscar listas');
   }
 });
 
@@ -892,7 +1058,8 @@ app.get('/api/lists', authenticateToken, authorizeAdmin, async (req, res) => {
 
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
   try {
-    const data = await db.all('SELECT * FROM campaign_summaries ORDER BY last_updated DESC');
+    // Por enquanto o Dashboard considera apenas o quadro padrão (IA Manutenção)
+    const data = await db.all('SELECT * FROM campaign_summaries WHERE board_id = ? ORDER BY last_updated DESC', [DEFAULT_BOARD_ID]);
     res.status(200).json(data);
   } catch (error) {
     console.error('Error fetching dashboard data:', error);
@@ -923,8 +1090,7 @@ app.get('/api/campaign-summary', authenticateToken, async (req, res) => {
     res.status(200).json(finalSummary);
 
   } catch (error) {
-    console.error('Error in campaign summary:', error);
-    res.status(500).json({ message: 'Error generating summary', error: error.message });
+    sendSyncError(res, error, 'Erro ao gerar resumo da campanha');
   }
 });
 
@@ -951,8 +1117,7 @@ app.post('/api/campaign-summary/refresh', authenticateToken, authorizeRoles('adm
     res.status(200).json(finalSummary);
 
   } catch (error) {
-    console.error('Error refreshing summary:', error);
-    res.status(500).json({ message: 'Error refreshing summary', error: error.message });
+    sendSyncError(res, error, 'Erro ao atualizar campanha');
   }
 });
 
@@ -1391,6 +1556,10 @@ const WEBHOOK_FIELDS = [
   'total_entregue', 'total_respostas', 'venda_ia', 'venda_manual', 'mgs_enviada'
 ];
 
+app.get('/api/version', authenticateToken, authorizeAdmin, (req, res) => {
+  res.status(200).json({ version: APP_VERSION });
+});
+
 app.get('/api/integrations/webhook', authenticateToken, authorizeAdmin, (req, res) => {
   res.status(200).json({ enabled: Boolean(WEBHOOK_REPORT_URL) });
 });
@@ -1435,15 +1604,92 @@ app.post('/api/integrations/webhook/report', authenticateToken, authorizeAdmin, 
 
 let currentCronJobs = [];
 
-const pushLog = async (title, message, type) => {
+const pushLog = async (title, message, type, details = null) => {
   const id = Math.random().toString(36).substring(7);
   try {
     await db.run(
-      "INSERT INTO sys_logs (id, title, message, type, timestamp, is_read) VALUES (?, ?, ?, ?, datetime('now', 'localtime'), 0)",
-      [id, title, message, type]
+      "INSERT INTO sys_logs (id, title, message, type, timestamp, is_read, details) VALUES (?, ?, ?, ?, datetime('now', 'localtime'), 0, ?)",
+      [id, title, message, type, details ? JSON.stringify(details) : null]
     );
   } catch (err) {
     console.error('Erro ao salvar log no banco:', err);
+  }
+};
+
+const CRON_TIME_REGEX = /^([01]?\d|2[0-3]):[0-5]\d$/;
+const CRON_TIMEZONE = process.env.TZ || 'America/Sao_Paulo';
+const MAX_FAILURES_IN_LOG = 50;
+
+// Atualiza todas as campanhas cadastradas e registra uma notificação com o resultado.
+// Em caso de falha, a notificação traz um resumo e a lista de campanhas com o motivo de cada erro.
+// Evita duas sincronizações simultâneas (ex.: horários próximos com uma execução ainda em andamento)
+let syncInProgress = false;
+
+const runScheduledSync = async (scheduledTime) => {
+  if (syncInProgress) {
+    console.warn(`[Cron] Sincronização das ${scheduledTime} ignorada: a anterior ainda está em andamento.`);
+    await pushLog('Agendamento Automático (Ignorado)', `A sincronização das ${scheduledTime} não foi iniciada porque a anterior ainda estava em andamento.`, 'warning');
+    return;
+  }
+  syncInProgress = true;
+  try {
+    await runScheduledSyncNow(scheduledTime);
+  } finally {
+    syncInProgress = false;
+  }
+};
+
+const runScheduledSyncNow = async (scheduledTime) => {
+  console.log('[Cron] Iniciando atualização de campanhas agendada...');
+  const startedAt = new Date().toISOString();
+
+  try {
+    const campaigns = (await db.all('SELECT * FROM campaigns')).filter(c => c.name && c.name.trim());
+    let updatedCount = 0;
+    const failures = [];
+    let abortReason = null;
+
+    for (const camp of campaigns) {
+      const campaignName = camp.name.trim();
+      if (abortReason) {
+        failures.push({ campaign: campaignName, code: 'SKIPPED', message: 'Não processada: a sincronização foi interrompida.' });
+        continue;
+      }
+      try {
+        await processCampaign(campaignName, DEFAULT_BOARD_ID, undefined, {}, true);
+        updatedCount++;
+      } catch (e) {
+        const err = withSyncContext(e, { campaign: campaignName });
+        console.error(`[Cron] Erro ao atualizar a campanha ${campaignName}:`, err.code, err.message, err.details);
+        failures.push({ campaign: campaignName, code: err.code, message: err.message, details: err.details });
+        // Erro de credencial afeta todas as campanhas: interrompe para não repetir chamadas inúteis
+        if (err.code === 'HABLLA_AUTH') abortReason = err.message;
+      }
+    }
+
+    if (failures.length > 0) {
+      const failedCount = failures.filter(f => f.code !== 'SKIPPED').length;
+      const skippedCount = failures.length - failedCount;
+      const mainCause = failures.find(f => f.code !== 'SKIPPED')?.message || '';
+      let message = `${updatedCount} de ${campaigns.length} campanhas atualizadas; ${failedCount} com erro`;
+      if (skippedCount > 0) message += ` e ${skippedCount} não processadas`;
+      message += `. Principal causa: ${mainCause} (Horário: ${scheduledTime}).`;
+
+      await pushLog(
+        updatedCount === 0 ? 'Agendamento Automático (Falhou)' : 'Agendamento Automático (Concluído com Alertas)',
+        message,
+        updatedCount === 0 ? 'error' : 'warning',
+        { startedAt, scheduledTime, total: campaigns.length, updated: updatedCount, failures: failures.slice(0, MAX_FAILURES_IN_LOG) }
+      );
+    } else if (updatedCount > 0) {
+      await pushLog('Agendamento Automático (Sucesso)', `As campanhas (${updatedCount}) foram sincronizadas corretamente às ${scheduledTime}.`, 'success');
+    }
+    console.log(`[Cron] Atualização concluída. ${updatedCount} campanhas atualizadas, ${failures.length} com falha (Horário agendado: ${scheduledTime}).`);
+  } catch (error) {
+    console.error('[Cron] Falha ao executar tarefa agendada:', error);
+    await pushLog('Erro Crítico no Agendamento', `A sincronização agendada não pôde ser executada: ${error.message} (Horário: ${scheduledTime})`, 'error', {
+      startedAt, scheduledTime, code: error.code || 'CRON_ERROR', cause: error.message
+    });
   }
 };
 
@@ -1460,43 +1706,15 @@ const setupCronJob = async () => {
       
       times.forEach(t => {
         if (!t) return;
-        const [hour, minute] = t.split(':');
-        const cronExpression = `${minute} ${hour} * * *`; // Roda diarimente no minuto e hora marcados
+        if (!CRON_TIME_REGEX.test(t)) {
+          console.error(`[Cron] Horário inválido ignorado: "${t}" (esperado HH:MM).`);
+          return;
+        }
+        const [hour, minute] = t.split(':').map(Number);
+        const cronExpression = `${minute} ${hour} * * *`; // Roda diariamente no minuto e hora marcados
         
-        console.log(`[Cron] Agendado para rodar às ${t} (frequencia: ${config.frequency}).`);
-        const job = cron.schedule(cronExpression, async () => {
-          console.log('[Cron] Iniciando atualização de campanhas agendada...');
-          try {
-            const campaigns = await db.all('SELECT * FROM campaigns');
-            let boardId = process.env.BOARD_ID_HABLLA;
-            if (!boardId) {
-              boardId = '682251a6c5a42b757a5dbe79'; // Fallback to IA Manutenção if missing
-            }
-            let updatedCount = 0;
-            let errorCount = 0;
-            for (const camp of campaigns) {
-              if (camp.name) {
-                try {
-                  // Utilizando 'Desconhecido' ou 'Board Agendado' como boardName
-                  await processCampaign(camp.name.trim(), boardId, 'Board Agendado', {}, true);
-                  updatedCount++;
-                } catch (e) {
-                  console.error(`[Cron] Erro ao atualizar a campanha ${camp.name}:`, e.message);
-                  errorCount++;
-                }
-              }
-            }
-            if (errorCount > 0) {
-              await pushLog('Agendamento Automático (Concluído com Alertas)', `${updatedCount} campanhas atualizadas. ${errorCount} erros detalhadas no terminal. (Horário: ${t}).`, 'warning');
-            } else if (updatedCount > 0) {
-              await pushLog('Agendamento Automático (Sucesso)', `As campanhas (${updatedCount}) foram sincronizadas corretamente às ${t}.`, 'success');
-            }
-            console.log(`[Cron] Atualização concluída. ${updatedCount} campanhas atualizadas (Horário agendado: ${t}).`);
-          } catch (error) {
-            console.error('[Cron] Falha ao executar tarefa agendada:', error);
-            await pushLog('Erro Crítico no Agendamento', `O cron falhou com o erro: ${error.message} (Horário: ${t})`, 'error');
-          }
-        });
+        console.log(`[Cron] Agendado para rodar às ${t} (${CRON_TIMEZONE}, frequência: ${config.frequency}).`);
+        const job = cron.schedule(cronExpression, () => runScheduledSync(t), { timezone: CRON_TIMEZONE });
         currentCronJobs.push(job);
       });
     }
@@ -1521,6 +1739,11 @@ app.post('/api/settings/cronjob', authenticateToken, authorizeAdmin, async (req,
   if (!time) {
     return res.status(400).json({ message: 'O horário é obrigatório.' });
   }
+  const timeList = Array.isArray(time) ? time : [time];
+  const invalidTimes = timeList.filter(t => typeof t !== 'string' || !CRON_TIME_REGEX.test(t));
+  if (invalidTimes.length > 0) {
+    return sendError(res, 400, 'INVALID_CRON_TIME', `Horário inválido: ${invalidTimes.join(', ')} (use o formato HH:MM).`);
+  }
 
   try {
     const config = JSON.stringify({ enabled: !!enabled, time, frequency: frequency || '1x por dia' });
@@ -1539,7 +1762,11 @@ app.post('/api/settings/cronjob', authenticateToken, authorizeAdmin, async (req,
 app.get('/api/sys-logs', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
     const logs = await db.all('SELECT * FROM sys_logs WHERE is_read = 0 ORDER BY timestamp DESC');
-    res.status(200).json(logs);
+    res.status(200).json(logs.map(log => {
+      let details = null;
+      try { details = log.details ? JSON.parse(log.details) : null; } catch (e) { }
+      return { ...log, details };
+    }));
   } catch (error) {
     res.status(500).json([]);
   }
@@ -1607,4 +1834,7 @@ app.put('/api/users/theme', authenticate({ allowPendingPasswordChange: true }), 
 });
 
 // --- Exportações para testes ---
-export { app, initializeDatabase, calculateSummary, aggregateSummaries, resetLoginRateLimiter, validateDatabaseFile, resolveBackupPath };
+export {
+  app, initializeDatabase, calculateSummary, aggregateSummaries, resetLoginRateLimiter, validateDatabaseFile, resolveBackupPath,
+  SyncError, buildHabllaHttpError, buildHabllaNetworkError, withSyncContext, processCampaign
+};

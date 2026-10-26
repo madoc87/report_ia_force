@@ -3,6 +3,10 @@ FROM node:20-alpine
 # Set working directory
 WORKDIR /app
 
+# Fuso horário de Brasília: datas gravadas pelo SQLite (localtime), agendamentos e formatação de datas
+RUN apk add --no-cache tzdata
+ENV TZ=America/Sao_Paulo
+
 # Copy package files
 COPY package*.json ./
 
