@@ -421,11 +421,8 @@ function App() {
         throw new Error('A Data de Início não pode ser posterior à Data de Fim.');
       }
       // A data de fim inclui o dia inteiro (até 23:59:59)
-      const createdAt = {
-        start_date: startDate.toISOString(),
-        end_date: endOfDay(endDate).toISOString(),
-      };
-      params.append('created_at', JSON.stringify(createdAt));
+      params.append('startDate', startDate.toISOString());
+      params.append('endDate', endOfDay(endDate).toISOString());
     }
 
     // Otimização: Enviamos o nome da campanha como query param se apenas uma estiver selecionada.
@@ -943,6 +940,8 @@ ${/*🗂️ Quadro: ${campaignSummary.board}*/''}
                               options={campaignsData}
                               selected={selectedCampaigns}
                               onChange={setSelectedCampaigns}
+                              // Analistas só podem escolher campanhas cadastradas
+                              allowCustom={user?.role !== 'user'}
                               className={searchEmptyCampaign ? "opacity-50 pointer-events-none" : ""}
                             />
                           </div>

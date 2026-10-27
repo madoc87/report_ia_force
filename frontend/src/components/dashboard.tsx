@@ -387,6 +387,8 @@ export function Dashboard({ onMenuClick, notifications, setNotifications, user, 
               options={campaignsData}
               selected={selectedCampaigns}
               onChange={setSelectedCampaigns}
+              // O Dashboard só exibe campanhas cadastradas: nomes digitados não teriam dados
+              allowCustom={false}
             />
           </div>
         )}

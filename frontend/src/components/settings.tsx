@@ -1059,16 +1059,15 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
     );
 }
 
-// Selo discreto com a versão da aplicação (frontend e backend), exibido na mesma linha do título.
-// Se as versões forem diferentes, um dos containers não recebeu o último deploy.
+// Selo discreto com as versões do frontend e do backend, exibido na mesma linha do título.
+// Cada container tem a própria versão (package.json), então os números podem ser diferentes.
 function VersionBadge({ backendVersion }: { backendVersion: string | null }) {
     const frontendVersion = __APP_VERSION__;
-    const mismatch = Boolean(backendVersion && backendVersion !== frontendVersion);
-    const label = mismatch ? `v${frontendVersion} · API v${backendVersion}` : `v${frontendVersion}`;
+    const label = backendVersion
+        ? `v${frontendVersion} · API v${backendVersion}`
+        : `v${frontendVersion}`;
     const description = backendVersion
-        ? (mismatch
-            ? `Versões diferentes: frontend v${frontendVersion} e backend v${backendVersion}. Um dos containers não está atualizado.`
-            : `Frontend e backend na versão v${frontendVersion}`)
+        ? `Frontend v${frontendVersion} · Backend v${backendVersion}`
         : `Frontend v${frontendVersion} (versão do backend indisponível)`;
 
     return (
@@ -1077,7 +1076,7 @@ function VersionBadge({ backendVersion }: { backendVersion: string | null }) {
                 <TooltipTrigger asChild>
                     <span
                         tabIndex={0}
-                        className={`text-xs font-mono font-medium cursor-default ${mismatch ? 'text-amber-500' : 'text-muted-foreground'}`}
+                        className="text-xs font-mono font-medium cursor-default text-muted-foreground"
                         aria-label={description}
                     >
                         {label}
