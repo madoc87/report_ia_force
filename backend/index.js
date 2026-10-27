@@ -570,7 +570,12 @@ const isRetriableHabllaError = (err) =>
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
+// Função de requisição HTTP usada nas chamadas à Hablla (substituível nos testes automatizados)
+let habllaFetch = fetch;
+const setHabllaFetchForTests = (fn) => { habllaFetch = fn || fetch; };
+
+// Monta a URL da Hablla. Valores em lista viram parâmetros repetidos (ex.: tags=a&tags=b).
+const buildHabllaUrl = (endpoint, queryParams = {}) => {
   const url = new URL(`${HABLLA_API_URL}${endpoint}`);
   Object.entries(queryParams).forEach(([key, value]) => {
     if (Array.isArray(value)) {
@@ -581,98 +586,253 @@ const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
       url.searchParams.append(key, value);
     }
   });
+  return url;
+};
 
-  let allResults = [];
-  let page = 1;
-  let totalPages = 1;
+// Busca UMA página na Hablla, com tempo limite e novas tentativas. Devolve { results, totalPages }.
+const fetchHabllaPage = async (endpoint, queryParams, page, extraCtx = {}) => {
+  const url = buildHabllaUrl(endpoint, { ...queryParams, page });
+  console.log(`Fetching URL: ${url}`);
 
-  do {
-    if (page > HABLLA_MAX_PAGES) {
-      throw new SyncError('HABLLA_PAGINATION_LIMIT',
-        'A consulta passou do limite de 10.000 cards da Hablla.',
-        { endpoint, totalPages, hint: 'Reduza o período ou divida a campanha em consultas menores.' });
-    }
-
-    url.searchParams.set('page', page);
-    console.log(`Fetching URL: ${url}`);
-
-    let attempt = 0;
-    let success = false;
-
-    while (!success) {
-      attempt++;
-      const ctx = { endpoint, page, totalPages, attempts: attempt };
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    const ctx = { endpoint, page, attempts: attempt, ...extraCtx };
+    try {
+      let response;
       try {
-        let response;
-        try {
-          response = await fetch(url, {
-            headers: {
-              'Authorization': API_TOKEN_HABLLA,
-              'Content-Type': 'application/json',
-            },
-            signal: AbortSignal.timeout(HABLLA_REQUEST_TIMEOUT_MS),
-          });
-        } catch (networkError) {
-          throw buildHabllaNetworkError(networkError, ctx);
-        }
+        response = await habllaFetch(url, {
+          headers: {
+            'Authorization': API_TOKEN_HABLLA,
+            'Content-Type': 'application/json',
+          },
+          signal: AbortSignal.timeout(HABLLA_REQUEST_TIMEOUT_MS),
+        });
+      } catch (networkError) {
+        throw buildHabllaNetworkError(networkError, ctx);
+      }
 
-        if (!response.ok) {
-          const errorBody = await response.text().catch(() => '');
-          console.error(`[Hablla] HTTP ${response.status} em ${endpoint} (página ${page}):`, truncate(errorBody));
-          const httpError = buildHabllaHttpError(response.status, errorBody, ctx);
-          if (httpError.code === 'HABLLA_RATE_LIMIT') {
-            const retryAfter = Number(response.headers.get('retry-after'));
-            httpError.retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 10000) : null;
-          }
-          throw httpError;
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => '');
+        console.error(`[Hablla] HTTP ${response.status} em ${endpoint} (página ${page}):`, truncate(errorBody));
+        const httpError = buildHabllaHttpError(response.status, errorBody, ctx);
+        if (httpError.code === 'HABLLA_RATE_LIMIT') {
+          const retryAfter = Number(response.headers.get('retry-after'));
+          httpError.retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 10000) : null;
         }
+        throw httpError;
+      }
 
-        let data;
-        try {
-          data = await response.json();
-        } catch (parseError) {
-          throw new SyncError('HABLLA_INVALID_RESPONSE',
-            'A Hablla devolveu uma resposta em formato inesperado.',
-            { ...ctx, cause: parseError.message });
-        }
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        throw new SyncError('HABLLA_INVALID_RESPONSE',
+          'A Hablla devolveu uma resposta em formato inesperado.',
+          { ...ctx, cause: parseError.message });
+      }
 
-        // Algumas rotas podem devolver a lista diretamente, sem paginação
-        if (Array.isArray(data)) {
-          data = { results: data, totalPages: 1 };
-        }
+      // Algumas rotas podem devolver a lista diretamente, sem paginação
+      if (Array.isArray(data)) {
+        data = { results: data, totalPages: 1 };
+      }
 
-        if (!Array.isArray(data?.results)) {
-          throw new SyncError('HABLLA_INVALID_RESPONSE',
-            'A Hablla devolveu uma resposta sem a lista de resultados.',
-            { ...ctx, receivedKeys: data && typeof data === 'object' ? Object.keys(data).join(', ') : typeof data });
-        }
+      if (!Array.isArray(data?.results)) {
+        throw new SyncError('HABLLA_INVALID_RESPONSE',
+          'A Hablla devolveu uma resposta sem a lista de resultados.',
+          { ...ctx, receivedKeys: data && typeof data === 'object' ? Object.keys(data).join(', ') : typeof data });
+      }
 
-        allResults = allResults.concat(data.results);
-        totalPages = Number(data.totalPages) || 1;
-        success = true;
-
-        // A 1ª página já informa o total: se passar do limite da Hablla, falha na hora,
-        // em vez de fazer 200 requisições e só então receber "Pagination too deep".
-        if (page === 1 && totalPages > HABLLA_MAX_PAGES) {
-          throw new SyncError('HABLLA_PAGINATION_LIMIT',
-            `A consulta tem cerca de ${(totalPages * HABLLA_PAGE_LIMIT).toLocaleString('pt-BR')} cards, acima do limite de 10.000 da Hablla.`,
-            { endpoint, totalPages, maxPages: HABLLA_MAX_PAGES, hint: 'Reduza o período ou divida a campanha em consultas menores.' });
-        }
-      } catch (error) {
-        if (isRetriableHabllaError(error) && attempt < HABLLA_MAX_RETRIES) {
-          const waitMs = error.retryAfterMs || attempt * 1000;
-          console.warn(`[Hablla] Tentativa ${attempt} falhou na página ${page} (${error.code}). Nova tentativa em ${waitMs}ms.`);
-          await sleep(waitMs);
-        } else {
-          throw error;
-        }
+      return { results: data.results, totalPages: Number(data.totalPages) || 1 };
+    } catch (error) {
+      if (isRetriableHabllaError(error) && attempt < HABLLA_MAX_RETRIES) {
+        const waitMs = error.retryAfterMs || attempt * 1000;
+        console.warn(`[Hablla] Tentativa ${attempt} falhou na página ${page} (${error.code}). Nova tentativa em ${waitMs}ms.`);
+        await sleep(waitMs);
+      } else {
+        throw error;
       }
     }
+  }
+};
 
-    page++;
-  } while (page <= totalPages);
+const paginationLimitError = (endpoint, totalPages, extra = {}) => new SyncError('HABLLA_PAGINATION_LIMIT',
+  `A consulta tem cerca de ${(totalPages * HABLLA_PAGE_LIMIT).toLocaleString('pt-BR')} cards, acima do limite de 10.000 da Hablla.`,
+  { endpoint, totalPages, maxPages: HABLLA_MAX_PAGES, hint: 'Reduza o período ou divida a campanha em consultas menores.', ...extra });
 
-  return allResults;
+// Busca todas as páginas restantes a partir de uma 1ª página já obtida
+const fetchRemainingPages = async (endpoint, queryParams, firstPage, extraCtx = {}) => {
+  let results = [...firstPage.results];
+  for (let page = 2; page <= firstPage.totalPages; page++) {
+    const next = await fetchHabllaPage(endpoint, queryParams, page, { ...extraCtx, totalPages: firstPage.totalPages });
+    results = results.concat(next.results);
+  }
+  return results;
+};
+
+// Busca todas as páginas de uma listagem (etiquetas, setores, listas...).
+// A 1ª página informa o total: acima do limite da Hablla a consulta falha na hora.
+const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
+  const firstPage = await fetchHabllaPage(endpoint, queryParams, 1);
+  if (firstPage.totalPages > HABLLA_MAX_PAGES) {
+    throw paginationLimitError(endpoint, firstPage.totalPages);
+  }
+  return fetchRemainingPages(endpoint, queryParams, firstPage);
+};
+
+// --- Busca de cards com divisão por período ---
+// A Hablla não entrega mais de ~200 páginas (10.000 cards) por consulta, e a busca por campanha é por
+// semelhança (ex.: "HB Refil Venc JUN25.04" também traz JUN25.01, JUL25.04...). Quando o resultado passa do
+// limite, a consulta é dividida em janelas de data de criação (start_date/end_date/field_date=created_at),
+// cada janela é dividida ao meio até caber no limite, e os resultados são unidos sem duplicados.
+const CARDS_ENDPOINT = () => `/v3/workspaces/${WORKSPACE_ID_HABLLA}/cards`;
+const MIN_WINDOW_MS = 60 * 60 * 1000; // janelas menores que 1 hora não são mais divididas
+const MAX_SEGMENTED_REQUESTS = 2000; // proteção contra consultas excessivas à Hablla
+
+// Data inicial padrão da divisão: criação do workspace (extraída do próprio ID, formato ObjectId)
+const getDefaultCardsStartDate = () => {
+  if (process.env.HABLLA_CARDS_START_DATE) {
+    const configured = new Date(process.env.HABLLA_CARDS_START_DATE);
+    if (!isNaN(configured.getTime())) return configured;
+  }
+  if (isValidHabllaId(WORKSPACE_ID_HABLLA || '')) {
+    return new Date(parseInt(WORKSPACE_ID_HABLLA.slice(0, 8), 16) * 1000);
+  }
+  return new Date('2020-01-01T00:00:00.000Z');
+};
+
+const getCardId = (card) => card?.id || card?._id;
+
+const dedupeCards = (cards) => {
+  const seen = new Set();
+  return cards.filter(card => {
+    const id = getCardId(card);
+    if (!id) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+};
+
+// queryParams: filtros da Hablla (board, campaign, tags, source...).
+// dateRange: { start, end } opcional (Date); quando informado, é sempre enviado como start_date/end_date.
+const fetchHabllaCards = async (queryParams, dateRange = null) => {
+  const endpoint = CARDS_ENDPOINT();
+  const baseParams = { ...queryParams, limit: HABLLA_PAGE_LIMIT };
+  const windowParams = (start, end) => ({
+    ...baseParams,
+    start_date: start.toISOString(),
+    end_date: end.toISOString(),
+    field_date: 'created_at',
+    // Ordenação estável durante a coleta, para não pular nem repetir cards entre páginas
+    order: 'created_at',
+    direction_order: 'asc',
+  });
+
+  // 1ª tentativa: consulta direta (com o período, se o usuário filtrou por data)
+  const directParams = dateRange ? windowParams(dateRange.start, dateRange.end) : baseParams;
+  const firstPage = await fetchHabllaPage(endpoint, directParams, 1);
+  if (firstPage.totalPages <= HABLLA_MAX_PAGES) {
+    return fetchRemainingPages(endpoint, directParams, firstPage);
+  }
+
+  // Acima do limite: divide o período em janelas
+  const rootStart = dateRange ? dateRange.start : getDefaultCardsStartDate();
+  const rootEnd = dateRange ? dateRange.end : new Date(Date.now() + 24 * 60 * 60 * 1000);
+  console.warn(`[Hablla] ${firstPage.totalPages} páginas na consulta (limite ${HABLLA_MAX_PAGES}). Dividindo por período de ${rootStart.toISOString()} a ${rootEnd.toISOString()}.`);
+
+  let requestCount = 1;
+  const countRequests = (n) => {
+    requestCount += n;
+    if (requestCount > MAX_SEGMENTED_REQUESTS) {
+      throw new SyncError('HABLLA_TOO_MANY_REQUESTS',
+        `A consulta precisaria de mais de ${MAX_SEGMENTED_REQUESTS} requisições à Hablla e foi interrompida.`,
+        { endpoint, hint: 'Use um filtro de período menor ou um nome de campanha mais específico.' });
+    }
+  };
+
+  // Busca a 1ª página de uma janela
+  const probeWindow = async (start, end) => {
+    countRequests(1);
+    const params = windowParams(start, end);
+    const page = await fetchHabllaPage(endpoint, params, 1, { window: `${start.toISOString()} → ${end.toISOString()}` });
+    return { start, end, params, page };
+  };
+
+  // Resolve uma janela: se couber no limite, busca as páginas; senão, divide ao meio
+  const resolveWindow = async (win) => {
+    if (win.page.totalPages <= HABLLA_MAX_PAGES) {
+      countRequests(Math.max(0, win.page.totalPages - 1));
+      return fetchRemainingPages(endpoint, win.params, win.page, { window: `${win.start.toISOString()} → ${win.end.toISOString()}` });
+    }
+
+    const span = win.end.getTime() - win.start.getTime();
+    if (span <= MIN_WINDOW_MS) {
+      throw paginationLimitError(endpoint, win.page.totalPages, {
+        window: `${win.start.toISOString()} → ${win.end.toISOString()}`,
+        hint: 'Há cards demais criados em menos de 1 hora. Use um nome de campanha mais específico.'
+      });
+    }
+
+    const mid = new Date(win.start.getTime() + Math.floor(span / 2));
+    const left = await probeWindow(win.start, mid);
+    const right = await probeWindow(mid, win.end);
+
+    // Se a Hablla ignorasse o filtro de data, as duas metades teriam o mesmo total da janela inteira
+    if (left.page.totalPages + right.page.totalPages > win.page.totalPages * 1.5 + 1) {
+      throw new SyncError('HABLLA_DATE_FILTER_IGNORED',
+        'A Hablla não aplicou o filtro de data, então não foi possível dividir a consulta acima de 10.000 cards.',
+        {
+          endpoint, totalPages: win.page.totalPages, leftPages: left.page.totalPages, rightPages: right.page.totalPages,
+          hint: 'Informe ao suporte técnico: os parâmetros start_date/end_date não foram aceitos pela Hablla.'
+        });
+    }
+
+    const leftCards = await resolveWindow(left);
+    const rightCards = await resolveWindow(right);
+    return leftCards.concat(rightCards);
+  };
+
+  const root = await probeWindow(rootStart, rootEnd);
+  const cards = dedupeCards(await resolveWindow(root));
+  console.log(`[Hablla] Consulta dividida concluída: ${cards.length} cards em ${requestCount} requisições.`);
+  return cards;
+};
+
+// --- Filtro de etiquetas ---
+// A Hablla devolve cards com QUALQUER uma das etiquetas pedidas; a aplicação mantém só os que têm TODAS.
+const MAX_TAGS_PER_REQUEST = 50;
+
+const parseTagList = (tags) => {
+  if (!tags) return [];
+  const list = (Array.isArray(tags) ? tags : String(tags).split(','))
+    .map(t => String(t).trim())
+    .filter(Boolean);
+  return [...new Set(list)];
+};
+
+const getCardTagIds = (card) => (card?.tags || []).map(t => (typeof t === 'string' ? t : (t?.id || t?._id))).filter(Boolean);
+
+const filterCardsWithAllTags = (cards, requiredTagIds) => {
+  if (!requiredTagIds || requiredTagIds.length === 0) return cards;
+  return cards.filter(card => {
+    const cardTags = new Set(getCardTagIds(card));
+    return requiredTagIds.every(id => cardTags.has(id));
+  });
+};
+
+// Converte as datas recebidas do frontend (ISO) em período { start, end } validado
+const parseDateRange = (startDate, endDate) => {
+  if (!startDate || !endDate) return { range: null };
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    return { error: 'Período inválido: datas em formato não reconhecido.' };
+  }
+  if (start > end) {
+    return { error: 'Período inválido: a data de início é posterior à data de fim.' };
+  }
+  return { range: { start, end } };
 };
 
 // Adiciona campanha/etapa ao erro e converte erros inesperados em SyncError
@@ -778,8 +938,10 @@ const calculateSummary = (cards, boardName) => {
 // para não substituir o total da campanha por um recorte parcial.
 const DEFAULT_BOARD_NAME = 'IA Manutenção';
 
+// filters: { dateRange?: {start, end}, source?: string, tags?: string[] }
 const processCampaign = async (campaignName, boardId, boardName, filters = {}, forceRefresh = false) => {
-  const hasFilters = Object.keys(filters).length > 0;
+  const { dateRange = null, tags: requiredTags = [], ...habllaFilters } = filters;
+  const hasFilters = Boolean(dateRange) || requiredTags.length > 0 || Object.keys(habllaFilters).length > 0;
   const resolvedBoardName = boardName || (boardId === DEFAULT_BOARD_ID ? DEFAULT_BOARD_NAME : `Quadro ${boardId}`);
   const context = { campaign: campaignName, boardId };
 
@@ -826,21 +988,22 @@ const processCampaign = async (campaignName, boardId, boardName, filters = {}, f
 
   const queryParams = {
     board: boardId,
-    limit: HABLLA_PAGE_LIMIT,
     campaign: campaignName,
-    ...filters
+    ...habllaFilters,
+    ...(requiredTags.length > 0 ? { tags: requiredTags } : {})
   };
 
   let cards;
   try {
-    cards = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/cards`, queryParams);
+    cards = await fetchHabllaCards(queryParams, dateRange);
   } catch (error) {
     throw withSyncContext(error, { ...context, stage: 'Busca dos cards na Hablla' });
   }
 
   let summary;
   try {
-    const filteredCards = cards.filter(c => c && c.campaign === campaignName);
+    // A busca da Hablla é por semelhança: mantém só a campanha exata e, se houver, os cards com TODAS as etiquetas
+    const filteredCards = filterCardsWithAllTags(cards.filter(c => c && c.campaign === campaignName), requiredTags);
     summary = calculateSummary(filteredCards, resolvedBoardName);
   } catch (error) {
     throw withSyncContext(error, { ...context, stage: 'Cálculo do resumo', cardsReceived: cards.length });
@@ -972,13 +1135,37 @@ const parseCampaignList = (campaign) => {
   return list;
 };
 
+// Valida a lista de etiquetas (IDs da Hablla) enviada pelo frontend
+const resolveTagFilter = (tags) => {
+  const tagList = parseTagList(tags);
+  if (tagList.length > MAX_TAGS_PER_REQUEST || tagList.some(t => !isValidHabllaId(t))) {
+    return { error: { status: 400, code: 'INVALID_TAGS', message: `Etiquetas inválidas (máximo de ${MAX_TAGS_PER_REQUEST}).` } };
+  }
+  return { tagList };
+};
+
 // Administradores podem escolher quadro e filtros; demais perfis usam sempre o quadro padrão, sem filtros
-// (espelha o que a interface permite para cada perfil).
-const resolveSummaryRequest = (req, params) => {
+// (espelha o que a interface permite para cada perfil). Analistas só consultam campanhas cadastradas.
+const resolveSummaryRequest = async (req, params) => {
   const { campaign, board, boardName, startDate, endDate, source, tags } = params;
   const campaignList = parseCampaignList(campaign);
   if (!campaignList) {
     return { error: { status: 400, code: 'INVALID_CAMPAIGN', message: `Informe de 1 a ${MAX_CAMPAIGNS_PER_REQUEST} campanhas válidas.` } };
+  }
+
+  if (req.user.role === 'user') {
+    const placeholders = campaignList.map(() => '?').join(',');
+    const registered = await db.all(`SELECT name FROM campaigns WHERE TRIM(name) IN (${placeholders})`, campaignList);
+    const registeredNames = new Set(registered.map(r => r.name.trim()));
+    const notRegistered = campaignList.filter(c => !registeredNames.has(c));
+    if (notRegistered.length > 0) {
+      return {
+        error: {
+          status: 403, code: 'CAMPAIGN_NOT_REGISTERED',
+          message: `Campanha não cadastrada: ${notRegistered.slice(0, 5).join(', ')}${notRegistered.length > 5 ? '…' : ''}. Solicite o cadastro a um administrador.`
+        }
+      };
+    }
   }
 
   const isAdmin = req.user.role === 'admin';
@@ -989,11 +1176,15 @@ const resolveSummaryRequest = (req, params) => {
 
   const filters = {};
   if (isAdmin) {
-    if (startDate && endDate) {
-      filters.created_at = JSON.stringify({ start_date: startDate, end_date: endDate });
-    }
+    const { range, error: dateError } = parseDateRange(startDate, endDate);
+    if (dateError) return { error: { status: 400, code: 'INVALID_DATE_RANGE', message: dateError } };
+    if (range) filters.dateRange = range;
+
     if (source) filters.source = source;
-    if (tags) filters.tags = tags;
+
+    const { tagList, error: tagError } = resolveTagFilter(tags);
+    if (tagError) return { error: tagError };
+    if (tagList.length > 0) filters.tags = tagList;
   }
 
   return { campaignList, boardId, boardName: typeof boardName === 'string' ? boardName.slice(0, 100) : undefined, filters };
@@ -1006,18 +1197,23 @@ app.get('/api/cards', authenticateToken, authorizeAdmin, async (req, res) => {
     if (!isValidHabllaId(boardId)) {
       return sendError(res, 400, 'INVALID_BOARD', 'ID de quadro inválido.');
     }
-    const { tags, created_at, campaign, source } = req.query;
-    const limit = 50;
+    const { tags, startDate, endDate, campaign, source } = req.query;
+
+    const { range, error: dateError } = parseDateRange(startDate, endDate);
+    if (dateError) return sendError(res, 400, 'INVALID_DATE_RANGE', dateError);
+
+    const { tagList, error: tagError } = resolveTagFilter(tags);
+    if (tagError) return sendError(res, tagError.status, tagError.code, tagError.message);
+
     const queryParams = {
       board: boardId,
-      tags,
-      created_at,
       campaign,
       source,
-      limit,
+      ...(tagList.length > 0 ? { tags: tagList } : {}),
     };
-    const data = await fetchHabllaAPI(`/v3/workspaces/${WORKSPACE_ID_HABLLA}/cards`, queryParams);
-    res.status(200).json(data);
+    const cards = await fetchHabllaCards(queryParams, range);
+    // A Hablla devolve cards com qualquer uma das etiquetas; aqui ficam só os que têm todas
+    res.status(200).json(filterCardsWithAllTags(cards, tagList));
   } catch (error) {
     sendSyncError(res, withSyncContext(error, { stage: 'Busca de cards na Hablla' }), 'Erro ao buscar cards');
   }
@@ -1073,7 +1269,7 @@ app.get('/api/campaign-summary', authenticateToken, async (req, res) => {
     return sendError(res, 400, 'INVALID_CAMPAIGN', 'Campaign name is required for summary.');
   }
 
-  const resolved = resolveSummaryRequest(req, req.query);
+  const resolved = await resolveSummaryRequest(req, req.query);
   if (resolved.error) {
     return sendError(res, resolved.error.status, resolved.error.code, resolved.error.message);
   }
@@ -1100,7 +1296,7 @@ app.post('/api/campaign-summary/refresh', authenticateToken, authorizeRoles('adm
     return sendError(res, 400, 'INVALID_CAMPAIGN', 'Campaign name is required.');
   }
 
-  const resolved = resolveSummaryRequest(req, req.body);
+  const resolved = await resolveSummaryRequest(req, req.body);
   if (resolved.error) {
     return sendError(res, resolved.error.status, resolved.error.code, resolved.error.message);
   }
@@ -1836,5 +2032,6 @@ app.put('/api/users/theme', authenticate({ allowPendingPasswordChange: true }), 
 // --- Exportações para testes ---
 export {
   app, initializeDatabase, calculateSummary, aggregateSummaries, resetLoginRateLimiter, validateDatabaseFile, resolveBackupPath,
-  SyncError, buildHabllaHttpError, buildHabllaNetworkError, withSyncContext, processCampaign
+  SyncError, buildHabllaHttpError, buildHabllaNetworkError, withSyncContext, processCampaign,
+  fetchHabllaCards, filterCardsWithAllTags, parseTagList, setHabllaFetchForTests
 };
