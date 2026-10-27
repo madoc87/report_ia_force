@@ -879,3 +879,18 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
 - **nginx do frontend:** `index.html` e `runtime-config.json` sem cache e arquivos de `/assets` com cache longo; arquivos inexistentes em `/assets` respondem 404 (antes devolviam o `index.html`, o que podia deixar a tela em branco após um deploy). Compressão gzip habilitada.
 - **Fuso horário:** o container do backend usa `America/Sao_Paulo` (`tzdata` + `TZ` no Dockerfile), e o agendamento usa esse fuso explicitamente. Agendamentos, datas gravadas pelo banco e datas do resumo ficam no horário de Brasília.
 - **Testes:** novos `backend/__tests__/integration/sync.test.js`, `frontend/src/__tests__/unit/dashboard-utils.test.ts` e `frontend/src/__tests__/components/error-alert.test.tsx`.
+
+## 48. Divisão de Consultas Acima de 10.000 Cards, Filtro de Etiquetas e Campanhas Permitidas (26/10/2026)
+
+- **Consultas acima de 10.000 cards (limite de ~200 páginas da Hablla):**
+  - A busca da Hablla por campanha é por semelhança (ex.: "HB Refil Venc JUN25.04" também traz JUN25.01, JUL25.04 etc.), então uma consulta pode passar do limite mesmo que a campanha seja pequena.
+  - Quando a 1ª página indica mais de 200 páginas, a consulta é dividida automaticamente em janelas de data de criação (`start_date`/`end_date`/`field_date=created_at`, ordenadas por `created_at`). Cada janela é dividida ao meio até caber no limite, e os resultados são unidos sem duplicados. Depois disso a aplicação mantém só os cards da campanha exata.
+  - O período começa na data de criação do workspace (extraída do ID) ou em `HABLLA_CARDS_START_DATE`, se definida.
+  - Proteções: se a Hablla ignorar o filtro de data, a consulta é interrompida com o erro `HABLLA_DATE_FILTER_IGNORED`, em vez de repetir chamadas; há também um teto de 2.000 requisições por consulta.
+  - Consultas dentro do limite continuam sendo feitas como antes, sem filtro de data.
+- **Filtro de período:** passou a usar os parâmetros documentados da Hablla (`start_date`, `end_date`, `field_date=created_at`) no lugar de `created_at` em JSON, tanto em "Gerar Relatório"/"Buscar IDs" quanto no resumo de campanha. Períodos inválidos ou invertidos são recusados.
+- **Filtro de etiquetas:** a Hablla devolve cards com qualquer uma das etiquetas pedidas; a aplicação passou a manter apenas os cards que têm todas as etiquetas selecionadas (podem ter outras). As etiquetas são enviadas como parâmetros repetidos, conforme a documentação da API.
+- **Campanhas permitidas:** analistas só podem consultar campanhas cadastradas (validado no backend, erro `CAMPAIGN_NOT_REGISTERED`), e a opção de adicionar um nome digitado ficou disponível apenas para administradores e gestores na tela de Relatórios. No Dashboard, a opção foi removida para todos, pois nomes não cadastrados não têm dados.
+- **Versões:** frontend e backend mantêm versões independentes; o selo em Configurações mostra as duas (ex.: `v1.2.1 · API v1.1.0`) sem alerta de divergência.
+- **Interface:** `lang="pt-BR"` no HTML (corrige tradução automática e leitores de tela).
+- **Testes:** novo `backend/__tests__/integration/hablla-cards.test.js`, com uma API da Hablla simulada (divisão de 23.000 cards, filtro de data ignorado, etiquetas e campanhas de analistas).
