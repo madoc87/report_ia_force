@@ -220,6 +220,21 @@ function App() {
     return handleAuthErrors(response, handleLogout);
   };
 
+  // Carregamento inicial: se o backend ainda não responde (ex.: acabou de subir ou está reiniciando),
+  // tenta de novo algumas vezes antes de mostrar o erro de conexão
+  const INITIAL_LOAD_RETRY_DELAYS_MS = [1500, 3000, 5000];
+  const apiFetchWithRetry = async (url: string) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await apiFetch(url);
+      } catch (error) {
+        const isNetworkError = error instanceof TypeError;
+        if (!isNetworkError || attempt >= INITIAL_LOAD_RETRY_DELAYS_MS.length) throw error;
+        await new Promise(resolve => setTimeout(resolve, INITIAL_LOAD_RETRY_DELAYS_MS[attempt]));
+      }
+    }
+  };
+
   const addNotification = (notif: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
     const newNotif: Notification = {
       ...notif,
@@ -249,7 +264,7 @@ function App() {
       // Etiquetas da Hablla só são usadas no filtro exclusivo do administrador
       if (user?.role === 'admin') {
         try {
-          const tagsResponse = await apiFetch(`${BASE_URL}/api/tags`);
+          const tagsResponse = await apiFetchWithRetry(`${BASE_URL}/api/tags`);
           if (!tagsResponse.ok) {
             throw await toApiError(tagsResponse, 'Erro ao buscar as etiquetas da Hablla.');
           }
@@ -267,7 +282,7 @@ function App() {
       }
 
       try {
-        const campaignsResponse = await apiFetch(`${BASE_URL}/api/campaigns`);
+        const campaignsResponse = await apiFetchWithRetry(`${BASE_URL}/api/campaigns`);
         if (!campaignsResponse.ok) {
           throw await toApiError(campaignsResponse, 'Erro ao buscar as campanhas cadastradas.');
         }

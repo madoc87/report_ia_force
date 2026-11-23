@@ -56,17 +56,32 @@ export function MultiSelectCampaign({
     onChange(selected.filter((i) => i !== item));
   };
 
+  // A busca digitada é mantida após cada seleção (para marcar vários itens do mesmo filtro);
+  // o popover também continua aberto para permitir seleção múltipla.
   const handleSelect = (value: string) => {
     if (selected.includes(value)) {
       handleUnselect(value);
     } else {
       onChange([...selected, value]);
     }
-    setInputValue(""); // Limpar input após seleção
-    // Não fecha o popover para permitir seleção múltipla
   };
 
-  // Filtragem personalizada para buscar por nome, data ou mês
+  // Item digitado que não está na lista: depois de adicionado, a busca é limpa
+  const handleAddCustom = (value: string) => {
+    handleSelect(value);
+    setInputValue("");
+  };
+
+  // Busca por nome, data ou mês
+  const matchesSearch = (option: CampaignOption, search: string) => {
+    const searchLower = search.toLowerCase();
+    return (
+      option.name.toLowerCase().includes(searchLower) ||
+      option.date.toLowerCase().includes(searchLower) ||
+      option.month.toLowerCase().includes(searchLower)
+    );
+  };
+
   const filterFunction = (value: string, search: string) => {
     if (value === "selecionar todas") return 1; // Sempre exibir "Selecionar Todas"
     const option = options.find((opt) => opt.name === value);
@@ -74,24 +89,20 @@ export function MultiSelectCampaign({
       // Se não encontrar na lista (caso de item customizado já selecionado), compara apenas o valor
       return value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
     }
-    const searchLower = search.toLowerCase();
-    if (
-      option.name.toLowerCase().includes(searchLower) ||
-      option.date.toLowerCase().includes(searchLower) ||
-      option.month.toLowerCase().includes(searchLower)
-    ) {
-      return 1;
-    }
-    return 0;
+    return matchesSearch(option, search) ? 1 : 0;
   };
 
-  const isAllSelected = options.length > 0 && options.every((opt) => selected.includes(opt.name));
+  // "Selecionar Todas" age apenas sobre as opções exibidas pela busca atual (todas, se não houver busca)
+  const isFiltering = inputValue.trim() !== "";
+  const visibleOptions = isFiltering ? options.filter((opt) => matchesSearch(opt, inputValue)) : options;
+  const isAllSelected = visibleOptions.length > 0 && visibleOptions.every((opt) => selected.includes(opt.name));
 
   const toggleSelectAll = () => {
+    const visibleNames = new Set(visibleOptions.map((opt) => opt.name));
     if (isAllSelected) {
-      onChange([]);
+      onChange(isFiltering ? selected.filter((name) => !visibleNames.has(name)) : []);
     } else {
-      onChange(options.map((opt) => opt.name));
+      onChange([...selected, ...visibleOptions.map((opt) => opt.name).filter((name) => !selected.includes(name))]);
     }
   };
 
@@ -143,7 +154,7 @@ export function MultiSelectCampaign({
                   variant="ghost"
                   size="sm"
                   className="mt-2 w-full justify-start"
-                  onClick={() => handleSelect(inputValue)}
+                  onClick={() => handleAddCustom(inputValue)}
                 >
                   <Plus className="mr-2 h-4 w-4" />
                   Adicionar "{inputValue}"
@@ -164,6 +175,11 @@ export function MultiSelectCampaign({
                 )}
               />
               Selecionar Todas
+              {isFiltering && (
+                <span className="ml-1 text-xs text-muted-foreground font-normal">
+                  ({visibleOptions.length} exibidas)
+                </span>
+              )}
             </CommandItem>
             {options.map((option) => {
               const isSelected = selected.includes(option.name);
@@ -199,7 +215,7 @@ export function MultiSelectCampaign({
             {allowCustom && inputValue && !options.some(opt => opt.name === inputValue) && !selected.includes(inputValue) && (
               <CommandItem
                 value={inputValue}
-                onSelect={() => handleSelect(inputValue)}
+                onSelect={() => handleAddCustom(inputValue)}
                 className="border-t mt-1"
               >
                 <Plus className="mr-2 h-4 w-4" />

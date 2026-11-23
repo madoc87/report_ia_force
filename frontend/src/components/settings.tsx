@@ -114,6 +114,11 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
     const totalCampPages = Math.ceil(filteredCamps.length / CAMP_PER_PAGE) || 1;
     const currentCamps = filteredCamps.slice((campPage - 1) * CAMP_PER_PAGE, campPage * CAMP_PER_PAGE);
 
+    // Ao excluir a única campanha da última página, volta para a última página que ainda existe
+    useEffect(() => {
+        if (campPage > totalCampPages) setCampPage(totalCampPages);
+    }, [campPage, totalCampPages]);
+
     const BASE_URL = getBaseUrl();
 
     const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
@@ -765,7 +770,7 @@ export function Settings({ token, onMenuClick, notifications, setNotifications, 
                                     ))}
                                     {currentCamps.length === 0 && (
                                         <TableRow>
-                                            <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Nenhuma campanha cadastrada ainda.</TableCell>
+                                            <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">Nenhuma campanha cadastrada ainda.</TableCell>
                                         </TableRow>
                                     )}
                                 </TableBody>
