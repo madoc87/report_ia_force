@@ -894,3 +894,25 @@ Para subida deste Monorepo em plataformas conteinerizadas geridas (ex: EasyPanel
 - **Versões:** frontend e backend mantêm versões independentes; o selo em Configurações mostra as duas (ex.: `v1.2.1 · API v1.1.0`) sem alerta de divergência.
 - **Interface:** `lang="pt-BR"` no HTML (corrige tradução automática e leitores de tela).
 - **Testes:** novo `backend/__tests__/integration/hablla-cards.test.js`, com uma API da Hablla simulada (divisão de 23.000 cards, filtro de data ignorado, etiquetas e campanhas de analistas).
+
+## 49. Consultas Acima de 10.000 Cards Refeitas, Memória, Seleção de Campanhas e Paginação (18/11/2026)
+
+- **Divisão por período não funcionava em produção:** o agendamento de 28/10 falhou em 20 campanhas com `HABLLA_DATE_FILTER_IGNORED`. Consultas reais à API confirmaram o comportamento de cada versão da rota de cards:
+  - **v3** (usada pela aplicação): aplica `campaign` (por semelhança), `status`, `order` e `direction_order`, mas **ignora** `start_date`/`end_date`.
+  - **v1**: aplica `start_date`/`end_date` (com `field_date`; sem ele responde HTTP 500), mas **ignora** `campaign` e devolve o quadro inteiro (mais de 135 mil cards).
+  - Em ambas, o limite é a página 201 com `limit=50`.
+- **Nova estratégia para buscas com campanha (v3):** acima do limite, a consulta é dividida por status (`in_attendance`, `won`, `lost`, `paused`) e cada status com mais de 200 páginas é lido nos dois sentidos (`created_at` crescente e decrescente) até reunir todos os cards. Isso cobre até cerca de 20.000 cards por status; acima disso, ou se a soma dos status não cobrir o total, a consulta falha com um erro claro em vez de mostrar números incompletos.
+  - Validado contra a Hablla: "HB REFIL VENC MAI26.01" (10.557 cards na busca, 773 da campanha, igual ao último resumo salvo) e "HB ANIV 9MESES JUN 2026.01" (13.976 cards na busca, 692 da campanha), com no máximo 18 MB de memória.
+- **Filtro de período:** com campanha, o período passa a ser aplicado pela aplicação sobre o `created_at` de cada card, porque a v3 ignora as datas. Sem campanha e com período ("Gerar Relatório"/"Buscar IDs"), a busca usa a v1, que aplica as datas, e divide o período em janelas quando passa do limite.
+- **Carregamento inicial:** se o backend ainda não responde ao abrir a tela (ex.: acabou de subir ou está reiniciando), as etiquetas e as campanhas cadastradas são buscadas de novo até 3 vezes antes de mostrar o erro de conexão.
+
+- **Consultas grandes derrubavam o backend:** ao atualizar uma campanha cuja busca por semelhança passa de 10.000 cards, todos os cards recebidos (de todas as campanhas parecidas, com o conteúdo completo) ficavam na memória até o fim. Com dezenas de milhares de cards o processo esgotava a memória e o container era reiniciado, e o navegador mostrava `NETWORK_ERROR` ("Failed to fetch").
+  - Os cards de outras campanhas são descartados assim que cada página chega, e os da campanha guardam só os campos usados no resumo.
+  - Duplicados são removidos durante a coleta, sem cópias intermediárias das listas.
+  - O intervalo de datas do resumo é calculado com um laço, em vez de `Math.min(...lista)`, que estoura a pilha com listas muito grandes.
+  - O log registra, ao fim de cada etapa, os cards recebidos e mantidos, as requisições e a memória em uso.
+- **Seleção de várias campanhas (Relatórios, Dashboard e Dias de Disparo):**
+  - A busca digitada continua no campo depois de cada seleção; só é limpa quando o usuário apaga, ou depois de adicionar um nome que não estava na lista.
+  - "Selecionar Todas" age só sobre as opções exibidas pela busca, mostra quantas são e mantém as seleções anteriores. Clicar de novo desmarca só as exibidas. Sem busca, continua marcando ou desmarcando todas.
+- **Paginação em Configurações:** ao excluir a única campanha da última página, a lista volta para a última página existente, em vez de ficar em "Página 3 de 2" com a tabela vazia. A mensagem de lista vazia passou a ocupar as 6 colunas.
+- **Testes:** a API simulada da Hablla passou a reproduzir o comportamento real (v3 ignora datas, v1 ignora campanha, limite na página 201), com casos para a divisão por status, leitura nos dois sentidos, status acima do limite, status desconhecido, período aplicado pela aplicação e divisão por período na v1; novo `frontend/src/__tests__/components/multi-select-campaign.test.tsx`.
