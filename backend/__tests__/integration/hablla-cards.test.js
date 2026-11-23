@@ -1,6 +1,6 @@
 /**
  * Testes da busca de cards na Hablla com uma API simulada:
- * divisão por período acima de 10.000 cards, filtro de etiquetas (todas obrigatórias)
+ * consultas acima de 10.000 cards, filtro de etiquetas (todas obrigatórias)
  * e restrição de campanhas para analistas.
  */
 import request from 'supertest';
@@ -12,36 +12,55 @@ import {
 const TAG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const TAG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
 
-// Simula a rota de cards da Hablla: 50 por página, limite de 200 páginas,
-// filtro start_date/end_date pelo created_at e etiquetas com lógica "qualquer uma".
-const createFakeHablla = (cards, { ignoreDates = false } = {}) => {
+// Simula a rota de cards da Hablla como ela se comporta de fato:
+// - v3: aplica campaign (aqui, "contém"), status, order/direction_order; IGNORA start_date/end_date
+// - v1: aplica start_date/end_date (exige field_date); IGNORA campaign
+// - 50 por página, "Pagination too deep" acima da página 201; etiquetas com lógica "qualquer uma"
+const createFakeHablla = (cards) => {
   const calls = [];
   const fakeFetch = async (url) => {
-    const params = new URL(url).searchParams;
-    calls.push(params);
+    const parsed = new URL(url);
+    const version = parsed.pathname.split('/')[1];
+    const params = parsed.searchParams;
+    calls.push({ version, params });
     let list = cards;
 
+    const campaign = params.get('campaign');
+    if (version === 'v3' && campaign) {
+      list = list.filter(c => c.campaign.includes(campaign));
+    }
     const start = params.get('start_date');
     const end = params.get('end_date');
-    if (!ignoreDates && start && end) {
+    if (version === 'v1' && start && end) {
+      if (!params.get('field_date')) {
+        return { ok: false, status: 500, text: async () => '{"statusCode":500}', headers: { get: () => null } };
+      }
       list = list.filter(c => c.created_at >= start && c.created_at <= end);
     }
+    const status = params.get('status');
+    if (status) list = list.filter(c => c.status === status);
     const tags = params.getAll('tags');
     if (tags.length > 0) {
       list = list.filter(c => c.tags.some(t => tags.includes(t.id)));
     }
+    if (params.get('order') === 'created_at') {
+      const dir = params.get('direction_order') === 'desc' ? -1 : 1;
+      list = [...list].sort((a, b) => (a.created_at < b.created_at ? -dir : a.created_at > b.created_at ? dir : 0));
+    }
 
     const limit = Number(params.get('limit')) || 10;
     const page = Number(params.get('page')) || 1;
-    const totalPages = Math.max(1, Math.ceil(list.length / limit));
-    if (page > 200) {
+    const totalPages = Math.ceil(list.length / limit);
+    if (page > 201) {
       return { ok: false, status: 400, text: async () => '{"message":"Pagination too deep"}', headers: { get: () => null } };
     }
     const results = list.slice((page - 1) * limit, page * limit);
-    return { ok: true, status: 200, json: async () => ({ results, totalPages }), headers: { get: () => null } };
+    return { ok: true, status: 200, json: async () => ({ results, totalItems: list.length, totalPages }), headers: { get: () => null } };
   };
   return { fakeFetch, calls };
 };
+
+const STATUSES = ['lost', 'lost', 'lost', 'won', 'in_attendance'];
 
 // Gera cards distribuídos no tempo (1 a cada 10 minutos a partir de 01/01/2026)
 const makeCards = (count, campaign = 'HB Refil Venc JUN25.04') =>
@@ -49,6 +68,7 @@ const makeCards = (count, campaign = 'HB Refil Venc JUN25.04') =>
     id: `card-${i}`,
     campaign,
     name: `Cliente ${i}`,
+    status: STATUSES[i % STATUSES.length],
     created_at: new Date(Date.UTC(2026, 0, 1) + i * 10 * 60 * 1000).toISOString(),
     tags: [],
   }));
@@ -65,53 +85,87 @@ afterAll(async () => {
 });
 
 describe('fetchHabllaCards', () => {
-  test('consulta pequena: busca direta, sem enviar filtro de data', async () => {
+  test('consulta pequena: busca direta na v3, sem filtro de data', async () => {
     const { fakeFetch, calls } = createFakeHablla(makeCards(120));
     setHabllaFetchForTests(fakeFetch);
 
-    const cards = await fetchHabllaCards({ campaign: 'X' });
+    const cards = await fetchHabllaCards({ campaign: 'JUN25' });
 
     expect(cards).toHaveLength(120);
     expect(calls).toHaveLength(3);
-    expect(calls[0].get('start_date')).toBeNull();
-    expect(calls[0].get('limit')).toBe('50');
+    expect(calls[0].version).toBe('v3');
+    expect(calls[0].params.get('start_date')).toBeNull();
+    expect(calls[0].params.get('limit')).toBe('50');
   });
 
-  test('acima de 10.000 cards: divide por período e traz todos, sem duplicados', async () => {
-    const all = makeCards(23000);
-    const { fakeFetch, calls } = createFakeHablla(all);
+  test('acima de 10.000 cards: divide por status, lê nos dois sentidos e traz todos sem duplicados', async () => {
+    // 3/5 são "lost": 15.000 cards só nesse status (acima de 201 páginas)
+    const { fakeFetch, calls } = createFakeHablla(makeCards(25000));
     setHabllaFetchForTests(fakeFetch);
-    process.env.HABLLA_CARDS_START_DATE = '2025-12-01T00:00:00.000Z';
 
-    const cards = await fetchHabllaCards({ campaign: 'X' });
+    const cards = await fetchHabllaCards({ campaign: 'JUN25' });
 
-    expect(cards).toHaveLength(23000);
-    expect(new Set(cards.map(c => c.id)).size).toBe(23000);
-    expect(calls.some(p => p.get('field_date') === 'created_at')).toBe(true);
-    expect(calls.every(p => Number(p.get('page')) <= 200)).toBe(true);
-    delete process.env.HABLLA_CARDS_START_DATE;
+    expect(cards).toHaveLength(25000);
+    expect(new Set(cards.map(c => c.id)).size).toBe(25000);
+    expect(calls.every(c => c.version === 'v3')).toBe(true);
+    expect(calls.every(c => Number(c.params.get('page')) <= 201)).toBe(true);
+    expect(calls.some(c => c.params.get('status') === 'lost' && c.params.get('direction_order') === 'desc')).toBe(true);
   });
 
-  test('com período informado pelo usuário, envia start_date/end_date desde a 1ª chamada', async () => {
+  test('status com mais de ~20.000 cards: interrompe com erro claro', async () => {
+    const all = makeCards(21000).map(c => ({ ...c, status: 'lost' }));
+    const { fakeFetch } = createFakeHablla(all);
+    setHabllaFetchForTests(fakeFetch);
+
+    await expect(fetchHabllaCards({ campaign: 'JUN25' })).rejects.toMatchObject({ code: 'HABLLA_PAGINATION_LIMIT' });
+  });
+
+  test('cards com status fora dos conhecidos: falha em vez de mostrar números incompletos', async () => {
+    const all = makeCards(11000).map((c, i) => (i % 100 === 0 ? { ...c, status: 'outro' } : c));
+    const { fakeFetch } = createFakeHablla(all);
+    setHabllaFetchForTests(fakeFetch);
+
+    await expect(fetchHabllaCards({ campaign: 'JUN25' })).rejects.toMatchObject({ code: 'HABLLA_INCOMPLETE_RESULT' });
+  });
+
+  test('transform descarta cards de outras campanhas página a página, inclusive na consulta dividida', async () => {
+    // Busca por semelhança: metade dos cards é de outra campanha parecida
+    const all = makeCards(23000).map((c, i) => ({ ...c, campaign: i % 2 ? 'HB X.02' : 'HB X.01', extra: 'x'.repeat(100) }));
+    const { fakeFetch } = createFakeHablla(all);
+    setHabllaFetchForTests(fakeFetch);
+
+    const cards = await fetchHabllaCards({ campaign: 'HB X' }, null, {
+      transform: (c) => (c.campaign === 'HB X.01' ? { id: c.id } : null)
+    });
+
+    expect(cards).toHaveLength(11500);
+    expect(cards.every(c => Object.keys(c).length === 1)).toBe(true);
+  });
+
+  test('com campanha e período: a v3 ignora as datas, então o período é aplicado pela aplicação', async () => {
     const { fakeFetch, calls } = createFakeHablla(makeCards(300));
     setHabllaFetchForTests(fakeFetch);
 
     const start = new Date('2026-01-01T00:00:00.000Z');
     const end = new Date('2026-01-01T09:59:59.999Z');
-    const cards = await fetchHabllaCards({ campaign: 'X' }, { start, end });
+    const cards = await fetchHabllaCards({ campaign: 'JUN25' }, { start, end });
 
     expect(cards).toHaveLength(60); // 10 horas x 6 cards por hora
-    expect(calls[0].get('start_date')).toBe(start.toISOString());
-    expect(calls[0].get('end_date')).toBe(end.toISOString());
+    expect(calls[0].version).toBe('v3');
   });
 
-  test('se a Hablla ignorar o filtro de data, interrompe com erro claro em vez de repetir consultas', async () => {
-    const { fakeFetch } = createFakeHablla(makeCards(12000), { ignoreDates: true });
+  test('sem campanha e com período: usa a v1 (que aplica as datas) e divide o período acima do limite', async () => {
+    const { fakeFetch, calls } = createFakeHablla(makeCards(23000));
     setHabllaFetchForTests(fakeFetch);
-    process.env.HABLLA_CARDS_START_DATE = '2025-12-01T00:00:00.000Z';
 
-    await expect(fetchHabllaCards({ campaign: 'X' })).rejects.toMatchObject({ code: 'HABLLA_DATE_FILTER_IGNORED' });
-    delete process.env.HABLLA_CARDS_START_DATE;
+    const start = new Date('2026-01-01T00:00:00.000Z');
+    const end = new Date('2026-12-31T23:59:59.999Z');
+    const cards = await fetchHabllaCards({ board: 'b' }, { start, end });
+
+    expect(cards).toHaveLength(23000);
+    expect(new Set(cards.map(c => c.id)).size).toBe(23000);
+    expect(calls.every(c => c.version === 'v1' && c.params.get('field_date') === 'created_at')).toBe(true);
+    expect(calls.every(c => Number(c.params.get('page')) <= 201)).toBe(true);
   });
 
   test('etiquetas são enviadas como parâmetros repetidos', async () => {
@@ -120,7 +174,7 @@ describe('fetchHabllaCards', () => {
 
     await fetchHabllaCards({ campaign: 'X', tags: [TAG_A, TAG_B] });
 
-    expect(calls[0].getAll('tags')).toEqual([TAG_A, TAG_B]);
+    expect(calls[0].params.getAll('tags')).toEqual([TAG_A, TAG_B]);
   });
 });
 

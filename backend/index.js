@@ -589,7 +589,7 @@ const buildHabllaUrl = (endpoint, queryParams = {}) => {
   return url;
 };
 
-// Busca UMA página na Hablla, com tempo limite e novas tentativas. Devolve { results, totalPages }.
+// Busca UMA página na Hablla, com tempo limite e novas tentativas. Devolve { results, totalPages, totalItems }.
 const fetchHabllaPage = async (endpoint, queryParams, page, extraCtx = {}) => {
   const url = buildHabllaUrl(endpoint, { ...queryParams, page });
   console.log(`Fetching URL: ${url}`);
@@ -643,7 +643,13 @@ const fetchHabllaPage = async (endpoint, queryParams, page, extraCtx = {}) => {
           { ...ctx, receivedKeys: data && typeof data === 'object' ? Object.keys(data).join(', ') : typeof data });
       }
 
-      return { results: data.results, totalPages: Number(data.totalPages) || 1 };
+      const totalPages = Number(data.totalPages) || 1;
+      const totalItems = Number(data.totalItems);
+      return {
+        results: data.results,
+        totalPages,
+        totalItems: Number.isFinite(totalItems) ? totalItems : totalPages * (Number(queryParams.limit) || HABLLA_PAGE_LIMIT)
+      };
     } catch (error) {
       if (isRetriableHabllaError(error) && attempt < HABLLA_MAX_RETRIES) {
         const waitMs = error.retryAfterMs || attempt * 1000;
@@ -660,12 +666,15 @@ const paginationLimitError = (endpoint, totalPages, extra = {}) => new SyncError
   `A consulta tem cerca de ${(totalPages * HABLLA_PAGE_LIMIT).toLocaleString('pt-BR')} cards, acima do limite de 10.000 da Hablla.`,
   { endpoint, totalPages, maxPages: HABLLA_MAX_PAGES, hint: 'Reduza o período ou divida a campanha em consultas menores.', ...extra });
 
-// Busca todas as páginas restantes a partir de uma 1ª página já obtida
-const fetchRemainingPages = async (endpoint, queryParams, firstPage, extraCtx = {}) => {
-  let results = [...firstPage.results];
+// Busca todas as páginas restantes a partir de uma 1ª página já obtida.
+// collect (opcional) recebe cada página assim que chega; sem ele, as páginas são devolvidas em uma lista.
+const fetchRemainingPages = async (endpoint, queryParams, firstPage, extraCtx = {}, collect = null) => {
+  const results = [];
+  const add = collect || ((items) => { for (const item of items) results.push(item); });
+  add(firstPage.results);
   for (let page = 2; page <= firstPage.totalPages; page++) {
     const next = await fetchHabllaPage(endpoint, queryParams, page, { ...extraCtx, totalPages: firstPage.totalPages });
-    results = results.concat(next.results);
+    add(next.results);
   }
   return results;
 };
@@ -680,69 +689,62 @@ const fetchHabllaAPI = async (endpoint, queryParams = {}) => {
   return fetchRemainingPages(endpoint, queryParams, firstPage);
 };
 
-// --- Busca de cards com divisão por período ---
-// A Hablla não entrega mais de ~200 páginas (10.000 cards) por consulta, e a busca por campanha é por
-// semelhança (ex.: "HB Refil Venc JUN25.04" também traz JUN25.01, JUL25.04...). Quando o resultado passa do
-// limite, a consulta é dividida em janelas de data de criação (start_date/end_date/field_date=created_at),
-// cada janela é dividida ao meio até caber no limite, e os resultados são unidos sem duplicados.
-const CARDS_ENDPOINT = () => `/v3/workspaces/${WORKSPACE_ID_HABLLA}/cards`;
+// --- Busca de cards acima do limite de páginas ---
+// Comportamento da Hablla confirmado em consultas reais (11/2026):
+// - v3 (índice otimizado): aplica `campaign` (por semelhança: "HB REFIL VENC MAI26.01" também traz MAI25.01,
+//   MAI26.05...), `status`, `order` e `direction_order`, mas IGNORA start_date/end_date.
+// - v1: aplica start_date/end_date (exige field_date), mas IGNORA `campaign` (devolve o quadro inteiro).
+// - Em ambas, páginas acima de ~201 (com limit=50) devolvem "Pagination too deep".
+// Por isso:
+// - Com campanha (v3): acima do limite, a consulta é dividida por status e cada parte é lida nos dois sentidos
+//   (created_at crescente e decrescente), o que cobre até ~20.000 cards por status. O período, quando
+//   informado, é aplicado pela aplicação sobre o created_at de cada card.
+// - Sem campanha e com período (v1): acima do limite, o período é dividido em janelas até cada uma caber.
+const CARDS_ENDPOINT = (version = 'v3') => `/${version}/workspaces/${WORKSPACE_ID_HABLLA}/cards`;
+const CARD_STATUSES = ['in_attendance', 'won', 'lost', 'paused'];
 const MIN_WINDOW_MS = 60 * 60 * 1000; // janelas menores que 1 hora não são mais divididas
 const MAX_SEGMENTED_REQUESTS = 2000; // proteção contra consultas excessivas à Hablla
 
-// Data inicial padrão da divisão: criação do workspace (extraída do próprio ID, formato ObjectId)
-const getDefaultCardsStartDate = () => {
-  if (process.env.HABLLA_CARDS_START_DATE) {
-    const configured = new Date(process.env.HABLLA_CARDS_START_DATE);
-    if (!isNaN(configured.getTime())) return configured;
-  }
-  if (isValidHabllaId(WORKSPACE_ID_HABLLA || '')) {
-    return new Date(parseInt(WORKSPACE_ID_HABLLA.slice(0, 8), 16) * 1000);
-  }
-  return new Date('2020-01-01T00:00:00.000Z');
-};
-
 const getCardId = (card) => card?.id || card?._id;
 
-const dedupeCards = (cards) => {
+const heapUsedMb = () => Math.round(process.memoryUsage().heapUsed / 1048576);
+
+// queryParams: filtros da Hablla (board, campaign, tags, source, status...).
+// dateRange: { start, end } opcional (Date), aplicado sobre o created_at dos cards.
+// transform (opcional): aplicado a cada card assim que a página chega; devolver null descarta o card.
+// Como a busca por campanha é por semelhança, uma consulta pode trazer dezenas de milhares de cards de
+// outras campanhas: descartá-los (ou reduzi-los aos campos usados) página a página evita estourar a memória.
+const fetchHabllaCards = async (queryParams, dateRange = null, { transform = null } = {}) => {
+  const cards = [];
   const seen = new Set();
-  return cards.filter(card => {
-    const id = getCardId(card);
-    if (!id) return true;
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-};
+  let received = 0;
+  const startTime = dateRange ? dateRange.start.getTime() : null;
+  const endTime = dateRange ? dateRange.end.getTime() : null;
+  const inDateRange = (card) => {
+    if (!dateRange) return true;
+    const time = new Date(card?.created_at).getTime();
+    return !isNaN(time) && time >= startTime && time <= endTime;
+  };
+  // Devolve quantos cards inéditos a página trouxe (usado para saber quando uma parte está completa)
+  const collect = (items) => {
+    let added = 0;
+    for (const raw of items) {
+      received++;
+      const id = getCardId(raw);
+      if (id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      added++;
+      if (!inDateRange(raw)) continue;
+      const card = transform ? transform(raw) : raw;
+      if (card) cards.push(card);
+    }
+    return added;
+  };
 
-// queryParams: filtros da Hablla (board, campaign, tags, source...).
-// dateRange: { start, end } opcional (Date); quando informado, é sempre enviado como start_date/end_date.
-const fetchHabllaCards = async (queryParams, dateRange = null) => {
-  const endpoint = CARDS_ENDPOINT();
-  const baseParams = { ...queryParams, limit: HABLLA_PAGE_LIMIT };
-  const windowParams = (start, end) => ({
-    ...baseParams,
-    start_date: start.toISOString(),
-    end_date: end.toISOString(),
-    field_date: 'created_at',
-    // Ordenação estável durante a coleta, para não pular nem repetir cards entre páginas
-    order: 'created_at',
-    direction_order: 'asc',
-  });
-
-  // 1ª tentativa: consulta direta (com o período, se o usuário filtrou por data)
-  const directParams = dateRange ? windowParams(dateRange.start, dateRange.end) : baseParams;
-  const firstPage = await fetchHabllaPage(endpoint, directParams, 1);
-  if (firstPage.totalPages <= HABLLA_MAX_PAGES) {
-    return fetchRemainingPages(endpoint, directParams, firstPage);
-  }
-
-  // Acima do limite: divide o período em janelas
-  const rootStart = dateRange ? dateRange.start : getDefaultCardsStartDate();
-  const rootEnd = dateRange ? dateRange.end : new Date(Date.now() + 24 * 60 * 60 * 1000);
-  console.warn(`[Hablla] ${firstPage.totalPages} páginas na consulta (limite ${HABLLA_MAX_PAGES}). Dividindo por período de ${rootStart.toISOString()} a ${rootEnd.toISOString()}.`);
-
-  let requestCount = 1;
-  const countRequests = (n) => {
+  let requestCount = 0;
+  const countRequests = (n, endpoint) => {
     requestCount += n;
     if (requestCount > MAX_SEGMENTED_REQUESTS) {
       throw new SyncError('HABLLA_TOO_MANY_REQUESTS',
@@ -750,27 +752,121 @@ const fetchHabllaCards = async (queryParams, dateRange = null) => {
         { endpoint, hint: 'Use um filtro de período menor ou um nome de campanha mais específico.' });
     }
   };
+  const logDone = (label) => console.log(`[Hablla] ${label}: ${received} cards recebidos, ${cards.length} mantidos, ${requestCount} requisições, memória ${heapUsedMb()} MB.`);
 
-  // Busca a 1ª página de uma janela
+  const baseParams = { ...queryParams, limit: HABLLA_PAGE_LIMIT };
+  const useDateWindows = Boolean(dateRange) && !queryParams.campaign;
+
+  if (useDateWindows) {
+    await fetchCardsByDateWindows(baseParams, dateRange, collect, countRequests, logDone);
+  } else {
+    await fetchCardsByStatus(baseParams, collect, countRequests, logDone);
+  }
+  return cards;
+};
+
+// v3: consulta direta; acima do limite, divide por status e lê cada parte nos dois sentidos
+const fetchCardsByStatus = async (baseParams, collect, countRequests, logDone) => {
+  const endpoint = CARDS_ENDPOINT('v3');
+  const ordered = (params, direction) => ({ ...params, order: 'created_at', direction_order: direction });
+
+  countRequests(1, endpoint);
+  const firstPage = await fetchHabllaPage(endpoint, ordered(baseParams, 'asc'), 1);
+  if (firstPage.totalPages <= HABLLA_MAX_PAGES) {
+    countRequests(Math.max(0, firstPage.totalPages - 1), endpoint);
+    await fetchRemainingPages(endpoint, ordered(baseParams, 'asc'), firstPage, {}, collect);
+    return;
+  }
+
+  const statuses = baseParams.status ? [baseParams.status] : CARD_STATUSES;
+  console.warn(`[Hablla] ${firstPage.totalItems} cards (${firstPage.totalPages} páginas, limite ${HABLLA_MAX_PAGES}). Dividindo por status: ${statuses.join(', ')}.`);
+
+  let segmentsTotal = 0;
+  for (const status of statuses) {
+    const params = { ...baseParams, status };
+    const ctx = { status };
+    countRequests(1, endpoint);
+    const first = await fetchHabllaPage(endpoint, ordered(params, 'asc'), 1, ctx);
+    segmentsTotal += first.totalItems;
+    if (first.totalItems === 0) continue;
+
+    if (first.totalPages <= HABLLA_MAX_PAGES) {
+      countRequests(Math.max(0, first.totalPages - 1), endpoint);
+      await fetchRemainingPages(endpoint, ordered(params, 'asc'), first, ctx, collect);
+      logDone(`Status ${status} concluído`);
+      continue;
+    }
+
+    // Lendo do mais antigo e do mais recente, cada sentido entrega até ~10.000 cards
+    if (first.totalPages > HABLLA_MAX_PAGES * 2) {
+      throw paginationLimitError(endpoint, first.totalPages, {
+        status,
+        hint: `Há mais de ${(HABLLA_MAX_PAGES * 2 * HABLLA_PAGE_LIMIT).toLocaleString('pt-BR')} cards com o status ${status} nesta busca. Use um nome de campanha mais específico.`
+      });
+    }
+    let segmentCount = collect(first.results);
+    for (let page = 2; page <= HABLLA_MAX_PAGES; page++) {
+      countRequests(1, endpoint);
+      const next = await fetchHabllaPage(endpoint, ordered(params, 'asc'), page, { ...ctx, direction: 'asc' });
+      segmentCount += collect(next.results);
+    }
+    for (let page = 1; page <= HABLLA_MAX_PAGES && segmentCount < first.totalItems; page++) {
+      countRequests(1, endpoint);
+      const next = await fetchHabllaPage(endpoint, ordered(params, 'desc'), page, { ...ctx, direction: 'desc' });
+      if (next.results.length === 0) break;
+      segmentCount += collect(next.results);
+    }
+    if (segmentCount < first.totalItems) {
+      throw new SyncError('HABLLA_INCOMPLETE_RESULT',
+        `Só foi possível obter ${segmentCount} de ${first.totalItems} cards com o status ${status}.`,
+        { endpoint, status, hint: 'Tente novamente; se persistir, use um nome de campanha mais específico.' });
+    }
+    logDone(`Status ${status} concluído (leitura nos dois sentidos)`);
+  }
+
+  // Cards sem nenhum dos status conhecidos ficariam de fora: melhor falhar do que mostrar números incompletos
+  if (segmentsTotal < firstPage.totalItems) {
+    throw new SyncError('HABLLA_INCOMPLETE_RESULT',
+      `A divisão por status cobriu ${segmentsTotal} de ${firstPage.totalItems} cards.`,
+      { endpoint, statuses: statuses.join(', '), hint: 'Há cards com um status não previsto. Informe ao suporte técnico.' });
+  }
+  logDone('Consulta dividida por status concluída');
+};
+
+// v1: consulta pelo período; acima do limite, divide o período ao meio até cada janela caber
+const fetchCardsByDateWindows = async (baseParams, dateRange, collect, countRequests, logDone) => {
+  const endpoint = CARDS_ENDPOINT('v1');
+  const windowLabel = (start, end) => `${start.toISOString()} → ${end.toISOString()}`;
+  const windowParams = (start, end) => ({
+    ...baseParams,
+    start_date: start.toISOString(),
+    end_date: end.toISOString(),
+    field_date: 'created_at', // sem field_date a v1 responde HTTP 500
+    // Ordenação estável durante a coleta, para não pular nem repetir cards entre páginas
+    order: 'created_at',
+    direction_order: 'asc',
+  });
+
   const probeWindow = async (start, end) => {
-    countRequests(1);
+    countRequests(1, endpoint);
     const params = windowParams(start, end);
-    const page = await fetchHabllaPage(endpoint, params, 1, { window: `${start.toISOString()} → ${end.toISOString()}` });
+    const page = await fetchHabllaPage(endpoint, params, 1, { window: windowLabel(start, end) });
     return { start, end, params, page };
   };
 
-  // Resolve uma janela: se couber no limite, busca as páginas; senão, divide ao meio
   const resolveWindow = async (win) => {
     if (win.page.totalPages <= HABLLA_MAX_PAGES) {
-      countRequests(Math.max(0, win.page.totalPages - 1));
-      return fetchRemainingPages(endpoint, win.params, win.page, { window: `${win.start.toISOString()} → ${win.end.toISOString()}` });
+      countRequests(Math.max(0, win.page.totalPages - 1), endpoint);
+      await fetchRemainingPages(endpoint, win.params, win.page, { window: windowLabel(win.start, win.end) }, collect);
+      logDone(`Janela ${windowLabel(win.start, win.end)} concluída`);
+      return;
     }
 
     const span = win.end.getTime() - win.start.getTime();
     if (span <= MIN_WINDOW_MS) {
       throw paginationLimitError(endpoint, win.page.totalPages, {
-        window: `${win.start.toISOString()} → ${win.end.toISOString()}`,
-        hint: 'Há cards demais criados em menos de 1 hora. Use um nome de campanha mais específico.'
+        window: windowLabel(win.start, win.end),
+        hint: 'Há cards demais criados em menos de 1 hora. Filtre também por campanha.'
       });
     }
 
@@ -788,15 +884,11 @@ const fetchHabllaCards = async (queryParams, dateRange = null) => {
         });
     }
 
-    const leftCards = await resolveWindow(left);
-    const rightCards = await resolveWindow(right);
-    return leftCards.concat(rightCards);
+    await resolveWindow(left);
+    await resolveWindow(right);
   };
 
-  const root = await probeWindow(rootStart, rootEnd);
-  const cards = dedupeCards(await resolveWindow(root));
-  console.log(`[Hablla] Consulta dividida concluída: ${cards.length} cards em ${requestCount} requisições.`);
-  return cards;
+  await resolveWindow(await probeWindow(dateRange.start, dateRange.end));
 };
 
 // --- Filtro de etiquetas ---
@@ -862,11 +954,19 @@ const sendSyncError = (res, error, fallbackMessage) => {
 const calculateSummary = (cards, boardName) => {
   const campaignNames = [...new Set(cards.map(c => c.campaign).filter(Boolean))].join(', ') || 'N/A';
 
-  const dates = cards.map(c => new Date(c.created_at).getTime());
+  // Laço em vez de Math.min(...lista): com dezenas de milhares de cards o spread estoura a pilha
+  let minTime = Infinity;
+  let maxTime = -Infinity;
+  for (const c of cards) {
+    const time = new Date(c.created_at).getTime();
+    if (isNaN(time)) continue;
+    if (time < minTime) minTime = time;
+    if (time > maxTime) maxTime = time;
+  }
   let dateRange = 'N/A';
-  if (dates.length > 0) {
-    const minDate = new Date(Math.min(...dates));
-    const maxDate = new Date(Math.max(...dates));
+  if (minTime !== Infinity) {
+    const minDate = new Date(minTime);
+    const maxDate = new Date(maxTime);
     const minDateStr = minDate.toLocaleDateString('pt-BR');
     const maxDateStr = maxDate.toLocaleDateString('pt-BR');
     dateRange = minDateStr === maxDateStr ? minDateStr : `${minDateStr} - ${maxDateStr}`;
@@ -938,6 +1038,17 @@ const calculateSummary = (cards, boardName) => {
 // para não substituir o total da campanha por um recorte parcial.
 const DEFAULT_BOARD_NAME = 'IA Manutenção';
 
+// Mantém do card só os campos usados no resumo (o card completo da Hablla é bem maior)
+const toSummaryCard = (card) => ({
+  id: getCardId(card),
+  campaign: card.campaign,
+  name: card.name,
+  created_at: card.created_at,
+  list: card.list,
+  status: card.status,
+  tags: (card.tags || []).map(t => (typeof t === 'string' ? { id: t } : { id: t?.id || t?._id, name: t?.name })),
+});
+
 // filters: { dateRange?: {start, end}, source?: string, tags?: string[] }
 const processCampaign = async (campaignName, boardId, boardName, filters = {}, forceRefresh = false) => {
   const { dateRange = null, tags: requiredTags = [], ...habllaFilters } = filters;
@@ -995,15 +1106,18 @@ const processCampaign = async (campaignName, boardId, boardName, filters = {}, f
 
   let cards;
   try {
-    cards = await fetchHabllaCards(queryParams, dateRange);
+    // A busca da Hablla é por semelhança: mantém só a campanha exata, já reduzida aos campos do resumo
+    cards = await fetchHabllaCards(queryParams, dateRange, {
+      transform: (card) => (card && card.campaign === campaignName ? toSummaryCard(card) : null)
+    });
   } catch (error) {
     throw withSyncContext(error, { ...context, stage: 'Busca dos cards na Hablla' });
   }
 
   let summary;
   try {
-    // A busca da Hablla é por semelhança: mantém só a campanha exata e, se houver, os cards com TODAS as etiquetas
-    const filteredCards = filterCardsWithAllTags(cards.filter(c => c && c.campaign === campaignName), requiredTags);
+    // Se houver etiquetas, mantém só os cards com TODAS elas
+    const filteredCards = filterCardsWithAllTags(cards, requiredTags);
     summary = calculateSummary(filteredCards, resolvedBoardName);
   } catch (error) {
     throw withSyncContext(error, { ...context, stage: 'Cálculo do resumo', cardsReceived: cards.length });
